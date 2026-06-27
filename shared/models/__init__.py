@@ -1,1 +1,35 @@
-"""SQLAlchemy models will be added in milestone M2."""
+from shared.models.base import Base
+from shared.models.core import (
+    AuditLog,
+    DemoAccount,
+    DemoTrade,
+    DemoTradeLeg,
+    ExchangeCredential,
+    Payment,
+    Plan,
+    ProcessedEvent,
+    Signal,
+    Subscription,
+    Trade,
+    TradeLeg,
+    User,
+    UserSetting,
+)
+
+__all__ = [
+    "AuditLog",
+    "Base",
+    "DemoAccount",
+    "DemoTrade",
+    "DemoTradeLeg",
+    "ExchangeCredential",
+    "Payment",
+    "Plan",
+    "ProcessedEvent",
+    "Signal",
+    "Subscription",
+    "Trade",
+    "TradeLeg",
+    "User",
+    "UserSetting",
+]
