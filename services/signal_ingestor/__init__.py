@@ -1,1 +1,1 @@
-"""Signal ingestor service placeholder."""
+"""Telegram userbot signal ingestion service."""

@@ -11,6 +11,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://mrrik:mrrik@localhost:5432/mrrik
       REDIS_URL: redis://localhost:6379/0
       RUN_DB_TESTS: "1"
+      RUN_REDIS_TESTS: "1"
     services:
       postgres:
         image: postgres:16
