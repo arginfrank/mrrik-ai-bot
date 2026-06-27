@@ -10,3 +10,13 @@ build/
 dist/
 .coverage
 htmlcov/
+/.pytest-tmp/
+/.pytest-tmp2/
+*.sqlite3
+*.db
+*.bak
+*.dump
+*.log
+.env.local
+.env.testnet
+.env.live
