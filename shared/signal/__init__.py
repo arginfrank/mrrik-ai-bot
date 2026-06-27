@@ -1,1 +1,83 @@
-"""Signal processing will be added in milestone M1."""
+"""Pure signal parsing, sanitizing, PnL, and sizing utilities."""
+
+from shared.signal.parser import (
+    SignalParseError,
+    normalize_symbol,
+    parse_decimal_token,
+    parse_entry_signal,
+    parse_message,
+    parse_result_message,
+    parse_stop_message,
+)
+from shared.signal.pnl import (
+    approximate_liquidation_price,
+    capped_loss_usdt_on_liquidation,
+    liquidation_happens_before_stop,
+    pnl_usdt_for_fraction,
+    roi_percent_on_margin,
+    signed_move_fraction,
+)
+from shared.signal.sanitizer import (
+    is_stop_loss_on_correct_side,
+    is_target_on_profitable_side,
+    longest_monotonic_subsequence_indices,
+    sanitize_signal,
+)
+from shared.signal.sizing import (
+    SizedLeg,
+    SizingResult,
+    SymbolFilters,
+    equal_fractions,
+    floor_to_step,
+    model2_fractions,
+    round_price_to_tick,
+    size_position,
+)
+from shared.signal.types import (
+    MessageKind,
+    ParsedEntrySignal,
+    ParsedMessage,
+    ParsedResultMessage,
+    ParsedStopMessage,
+    RejectedSignal,
+    SanitizedSignal,
+    SignalSide,
+    TargetCorrection,
+)
+
+__all__ = (
+    "MessageKind",
+    "ParsedEntrySignal",
+    "ParsedMessage",
+    "ParsedResultMessage",
+    "ParsedStopMessage",
+    "RejectedSignal",
+    "SanitizedSignal",
+    "SignalParseError",
+    "SignalSide",
+    "SizedLeg",
+    "SizingResult",
+    "SymbolFilters",
+    "TargetCorrection",
+    "approximate_liquidation_price",
+    "capped_loss_usdt_on_liquidation",
+    "equal_fractions",
+    "floor_to_step",
+    "is_stop_loss_on_correct_side",
+    "is_target_on_profitable_side",
+    "liquidation_happens_before_stop",
+    "longest_monotonic_subsequence_indices",
+    "model2_fractions",
+    "normalize_symbol",
+    "parse_decimal_token",
+    "parse_entry_signal",
+    "parse_message",
+    "parse_result_message",
+    "parse_stop_message",
+    "pnl_usdt_for_fraction",
+    "roi_percent_on_margin",
+    "round_price_to_tick",
+    "sanitize_signal",
+    "signed_move_fraction",
+    "size_position",
+)
