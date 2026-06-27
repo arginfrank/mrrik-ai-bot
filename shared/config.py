@@ -55,12 +55,31 @@ class DemoConfig(BaseModel):
     taker_fee_pct: Decimal = Decimal("0.04")
 
 
+class PaymentNetworkConfig(BaseModel):
+    usdt_contract: str
+    decimals: int
+    min_confirmations: int
+    explorer_base_url: str
+
+
+class PaymentPrecheckConfig(BaseModel):
+    trc20: PaymentNetworkConfig
+    bep20: PaymentNetworkConfig
+    polygon: PaymentNetworkConfig
+
+
+class AdminPanelConfig(BaseModel):
+    ip_allowlist: list[str] = Field(default_factory=lambda: ["127.0.0.1", "::1"])
+
+
 class FileConfig(BaseModel):
     plans: list[PlanConfig]
     risk: RiskConfig
     execution: ExecutionConfig
     sanitizer: SanitizerConfig
     demo: DemoConfig
+    payment_precheck: PaymentPrecheckConfig
+    admin_panel: AdminPanelConfig
 
 
 class EnvSettings(BaseSettings):

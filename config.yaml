@@ -33,3 +33,23 @@ demo:
   include_funding: false
   include_slippage: false
   taker_fee_pct: 0.04
+
+payment_precheck:
+  trc20:
+    usdt_contract: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+    decimals: 6
+    min_confirmations: 20
+    explorer_base_url: https://tronscan.org/#/transaction
+  bep20:
+    usdt_contract: "0x55d398326f99059fF775485246999027B3197955"
+    decimals: 18
+    min_confirmations: 15
+    explorer_base_url: https://bscscan.com/tx
+  polygon:
+    usdt_contract: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
+    decimals: 6
+    min_confirmations: 50
+    explorer_base_url: https://polygonscan.com/tx
+
+admin_panel:
+  ip_allowlist: ["127.0.0.1", "::1"]
