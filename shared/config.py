@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+from decimal import Decimal
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class PlanConfig(BaseModel):
+    code: str
+    duration_days: int
+    price_usdt: Decimal
+
+
+class RiskConfig(BaseModel):
+    fixed_margin_usdt: Decimal = Decimal("10")
+    default_model: int = 1
+    model2_weights: list[Decimal] = Field(
+        default_factory=lambda: [
+            Decimal("0.60"),
+            Decimal("0.20"),
+            Decimal("0.10"),
+            Decimal("0.07"),
+            Decimal("0.03"),
+        ]
+    )
+    model3_exit_roi_pct: Decimal = Decimal("20")
+    move_sl_to_be_after_tp1: bool = True
+    max_concurrent: int = 10
+
+
+class ExecutionConfig(BaseModel):
+    entry_mode: Literal["limit", "market"] = "limit"
+    entry_fill_timeout_sec: int = 900
+    entry_max_deviation_pct: Decimal = Decimal("0.5")
+    margin_type: Literal["isolated"] = "isolated"
+    maintenance_margin_rate_default: Decimal = Decimal("0.005")
+
+
+class SanitizerConfig(BaseModel):
+    decimal_shift_lo: Decimal = Decimal("5")
+    decimal_shift_hi: Decimal = Decimal("20")
+
+
+class DemoConfig(BaseModel):
+    start_balance_usdt: Decimal = Decimal("1000")
+    require_api_key: bool = False
+    api_key_scope: Literal["read_only"] = "read_only"
+    include_commission: bool = False
+    include_funding: bool = False
+    include_slippage: bool = False
+    taker_fee_pct: Decimal = Decimal("0.04")
+
+
+class FileConfig(BaseModel):
+    plans: list[PlanConfig]
+    risk: RiskConfig
+    execution: ExecutionConfig
+    sanitizer: SanitizerConfig
+    demo: DemoConfig
+
+
+class EnvSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_ignore_empty=True,
+        extra="ignore",
+    )
+
+    telegram_bot_token: SecretStr | None = None
+    tg_api_id: int | None = None
+    tg_api_hash: SecretStr | None = None
+    tg_userbot_session: SecretStr | None = None
+    source_channel_id: int | None = None
+    admin_telegram_ids: str | None = None
+    database_url: str = "postgresql+psycopg://mrrik:mrrik@localhost:5432/mrrik"
+    redis_url: str = "redis://localhost:6379/0"
+    fernet_key: SecretStr | None = None
+    wallet_trc20: SecretStr | None = None
+    wallet_bep20: SecretStr | None = None
+    wallet_polygon: SecretStr | None = None
+    tronscan_api_key: SecretStr | None = None
+    bscscan_api_key: SecretStr | None = None
+    polygonscan_api_key: SecretStr | None = None
+
+
+class AppSettings(BaseModel):
+    file: FileConfig
+    env: EnvSettings
+
+
+def load_config(config_path: str | Path = "config.yaml") -> AppSettings:
+    """Load non-secret YAML config plus secret/runtime env settings."""
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+
+    with path.open(encoding="utf-8") as config_file:
+        values = yaml.safe_load(config_file)
+
+    return AppSettings(file=FileConfig.model_validate(values), env=EnvSettings())
