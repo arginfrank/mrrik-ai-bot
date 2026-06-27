@@ -5,17 +5,15 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from shared.config import EnvSettings, load_config
+from shared.config import load_config
+from shared.models import Base
 
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def get_database_url() -> str:
     """Resolve the migration database URL from layered settings."""
-    try:
-        return load_config().env.database_url
-    except FileNotFoundError:
-        return EnvSettings().database_url
+    return load_config().env.database_url
 
 
 def run_migrations_offline() -> None:
