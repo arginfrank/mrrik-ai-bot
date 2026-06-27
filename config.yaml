@@ -1,0 +1,35 @@
+plans:
+  - code: P30
+    duration_days: 30
+    price_usdt: 49
+  - code: P90
+    duration_days: 90
+    price_usdt: 129
+
+risk:
+  fixed_margin_usdt: 10
+  default_model: 1
+  model2_weights: [0.60, 0.20, 0.10, 0.07, 0.03]
+  model3_exit_roi_pct: 20
+  move_sl_to_be_after_tp1: true
+  max_concurrent: 10
+
+execution:
+  entry_mode: limit
+  entry_fill_timeout_sec: 900
+  entry_max_deviation_pct: 0.5
+  margin_type: isolated
+  maintenance_margin_rate_default: 0.005
+
+sanitizer:
+  decimal_shift_lo: 5
+  decimal_shift_hi: 20
+
+demo:
+  start_balance_usdt: 1000
+  require_api_key: false
+  api_key_scope: read_only
+  include_commission: false
+  include_funding: false
+  include_slippage: false
+  taker_fee_pct: 0.04
