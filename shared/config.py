@@ -72,6 +72,42 @@ class AdminPanelConfig(BaseModel):
     ip_allowlist: list[str] = Field(default_factory=lambda: ["127.0.0.1", "::1"])
 
 
+class RetryConfig(BaseModel):
+    max_attempts: int = 3
+    base_delay_sec: Decimal = Decimal("0.5")
+    max_delay_sec: Decimal = Decimal("8")
+    jitter_pct: Decimal = Decimal("0.10")
+
+
+class RateLimitConfig(BaseModel):
+    telegram_messages_per_second: Decimal = Decimal("20")
+    exchange_requests_per_second: Decimal = Decimal("8")
+    explorer_requests_per_second: Decimal = Decimal("3")
+
+
+class MonitoringConfig(BaseModel):
+    health_stale_after_sec: int = 120
+    alert_stream: str = "notify"
+    admin_alerts_enabled: bool = True
+
+
+class BackupConfig(BaseModel):
+    enabled: bool = True
+    output_dir: str = "backups"
+    keep_last: int = 7
+
+
+class TestnetConfig(BaseModel):
+    enabled: bool = False
+    require_explicit_env: bool = True
+
+
+class LiveCanaryConfig(BaseModel):
+    enabled: bool = False
+    max_margin_usdt: Decimal = Decimal("5")
+    require_confirmation_text: str = "I_ACCEPT_REAL_MONEY_RISK"
+
+
 class FileConfig(BaseModel):
     plans: list[PlanConfig]
     risk: RiskConfig
@@ -80,6 +116,12 @@ class FileConfig(BaseModel):
     demo: DemoConfig
     payment_precheck: PaymentPrecheckConfig
     admin_panel: AdminPanelConfig
+    retry: RetryConfig = Field(default_factory=RetryConfig)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
+    backup: BackupConfig = Field(default_factory=BackupConfig)
+    testnet: TestnetConfig = Field(default_factory=TestnetConfig)
+    live_canary: LiveCanaryConfig = Field(default_factory=LiveCanaryConfig)
 
 
 class EnvSettings(BaseSettings):
@@ -105,6 +147,9 @@ class EnvSettings(BaseSettings):
     tronscan_api_key: SecretStr | None = None
     bscscan_api_key: SecretStr | None = None
     polygonscan_api_key: SecretStr | None = None
+    binance_testnet_api_key: SecretStr | None = None
+    binance_testnet_api_secret: SecretStr | None = None
+    live_canary_confirm: str | None = None
 
 
 class AppSettings(BaseModel):

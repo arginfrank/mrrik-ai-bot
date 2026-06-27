@@ -53,3 +53,33 @@ payment_precheck:
 
 admin_panel:
   ip_allowlist: ["127.0.0.1", "::1"]
+
+retry:
+  max_attempts: 3
+  base_delay_sec: 0.5
+  max_delay_sec: 8
+  jitter_pct: 0.10
+
+rate_limit:
+  telegram_messages_per_second: 20
+  exchange_requests_per_second: 8
+  explorer_requests_per_second: 3
+
+monitoring:
+  health_stale_after_sec: 120
+  alert_stream: notify
+  admin_alerts_enabled: true
+
+backup:
+  enabled: true
+  output_dir: backups
+  keep_last: 7
+
+testnet:
+  enabled: false
+  require_explicit_env: true
+
+live_canary:
+  enabled: false
+  max_margin_usdt: 5
+  require_confirmation_text: I_ACCEPT_REAL_MONEY_RISK
