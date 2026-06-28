@@ -27,6 +27,7 @@ from shared.exchange.types import (
 _PRODUCTION_REST_URL = "https://fapi.binance.com"
 _TESTNET_REST_URL = "https://testnet.binancefuture.com"
 _PRODUCTION_WS_URL = "wss://fstream.binance.com"
+_PRODUCTION_MARKET_WS_URL = f"{_PRODUCTION_WS_URL}/market"
 _TESTNET_WS_URL = "wss://stream.binancefuture.com"
 _API_RESTRICTIONS_URL = "https://api.binance.com/sapi/v1/account/apiRestrictions"
 
@@ -46,6 +47,9 @@ class BinanceFuturesClient:
             base_url=_TESTNET_REST_URL if testnet else _PRODUCTION_REST_URL,
         )
         self._ws_url = _TESTNET_WS_URL if testnet else _PRODUCTION_WS_URL
+        self._market_ws_url = (
+            _TESTNET_WS_URL if testnet else _PRODUCTION_MARKET_WS_URL
+        )
 
     async def verify_credentials(self) -> bool:
         try:
@@ -277,7 +281,9 @@ class BinanceFuturesClient:
         if not normalized:
             return
         streams = "/".join(f"{symbol}@markPrice@1s" for symbol in normalized)
-        async with websockets.connect(f"{self._ws_url}/stream?streams={streams}") as socket:
+        async with websockets.connect(
+            f"{self._market_ws_url}/stream?streams={streams}"
+        ) as socket:
             async for message in socket:
                 raw = json.loads(message)
                 data = raw.get("data", raw)

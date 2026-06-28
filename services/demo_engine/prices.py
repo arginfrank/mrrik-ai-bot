@@ -9,7 +9,7 @@ from typing import Any
 import websockets
 
 
-BINANCE_FUTURES_WS_URL = "wss://fstream.binance.com/stream?streams="
+BINANCE_FUTURES_WS_URL = "wss://fstream.binance.com/market/stream?streams="
 
 
 @dataclass(frozen=True)

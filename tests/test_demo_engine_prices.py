@@ -11,7 +11,11 @@ from services.demo_engine.prices import (
 
 def test_normalize_and_build_single_stream_url() -> None:
     assert normalize_stream_symbol("ETHUSDT") == "ethusdt"
-    assert "ethusdt@markPrice@1s" in build_mark_price_stream_url(["ETHUSDT"])
+    url = build_mark_price_stream_url(["ETHUSDT"])
+
+    assert url.startswith("wss://fstream.binance.com/market/stream?streams=")
+    assert not url.startswith("wss://fstream.binance.com/stream?streams=")
+    assert "ethusdt@markPrice@1s" in url
 
 
 def test_combined_stream_url_is_sorted_and_deduplicated() -> None:
