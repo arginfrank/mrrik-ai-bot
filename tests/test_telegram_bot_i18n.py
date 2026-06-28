@@ -18,3 +18,6 @@ def test_english_translation_and_formatting() -> None:
     )
     assert "49 USDT" in rendered
     assert "wallet-address" in rendered
+    assert "ENABLED" in t("demo_enabled")
+    assert "OPEN and CLOSE alerts" in t("demo_enabled")
+    assert t("demo_refresh_button") == "Refresh demo stats"

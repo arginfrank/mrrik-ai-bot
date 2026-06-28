@@ -50,6 +50,11 @@ _TEXTS: dict[str, dict[str, str]] = {
             "Maximum concurrent trades: {max_concurrent}"
         ),
         "demo_created": "Your demo account is ready.",
+        "demo_enabled": (
+            "Demo account ENABLED. You will receive demo OPEN and CLOSE alerts for "
+            "future signals."
+        ),
+        "demo_refresh_button": "Refresh demo stats",
         "demo_stats_unavailable": "Demo stats are currently unavailable.",
         "help": (
             "Use Subscribe to submit a subscription payment, Run Demo to view simulated "

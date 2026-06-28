@@ -36,6 +36,7 @@ from services.telegram_bot.events import (
 from services.telegram_bot.i18n import normalize_language, t
 from services.telegram_bot.keyboards import (
     back_to_main_keyboard,
+    demo_stats_keyboard,
     language_keyboard,
     main_menu_keyboard,
     networks_keyboard,
@@ -426,7 +427,6 @@ async def handle_demo(
     config: TelegramBotConfig,
 ) -> None:
     telegram_id, username = _identity(event)
-    text = t("demo_created")
     with _repository_context(repository_factory) as repository:
         user = repository.get_or_create_user(
             telegram_id=telegram_id,
@@ -439,10 +439,18 @@ async def handle_demo(
         get_stats = getattr(repository, "get_demo_stats", None)
         if callable(get_stats):
             try:
-                text = format_demo_stats(compute_demo_stats(get_stats(user.id)))
+                stats_text = format_demo_stats(compute_demo_stats(get_stats(user.id)))
             except (KeyError, TypeError, ValueError):
-                text = t("demo_stats_unavailable")
-    await _respond(event, text, reply_markup=back_to_main_keyboard())
+                stats_text = t("demo_stats_unavailable", user.language)
+        else:
+            stats_text = t("demo_stats_unavailable", user.language)
+        text = f"{t('demo_enabled', user.language)}\n\n{stats_text}"
+    await _respond(
+        event,
+        text,
+        reply_markup=demo_stats_keyboard(),
+        skip_unchanged=True,
+    )
     await _ack_if_callback(event)
 
 
@@ -648,9 +656,17 @@ def _settings_text(settings: Any, language: str) -> str:
     )
 
 
-async def _respond(event: Any, text: str, *, reply_markup: Any) -> None:
+async def _respond(
+    event: Any,
+    text: str,
+    *,
+    reply_markup: Any,
+    skip_unchanged: bool = False,
+) -> None:
     message = getattr(event, "message", None)
     if message is not None:
+        if skip_unchanged and getattr(message, "text", None) == text:
+            return
         await message.edit_text(text, reply_markup=reply_markup)
     else:
         await event.answer(text, reply_markup=reply_markup)

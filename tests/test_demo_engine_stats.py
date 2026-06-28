@@ -5,6 +5,24 @@ from decimal import Decimal
 from services.demo_engine.stats import compute_demo_stats, format_demo_stats
 
 
+def test_one_open_trade_counts_only_as_open() -> None:
+    stats = compute_demo_stats(
+        {
+            "start_balance_usdt": "1000",
+            "current_balance_usdt": "1000",
+            "fixed_margin_usdt": "10",
+            "trades": [{"status": "open", "realized_pnl_usdt": None}],
+        }
+    )
+
+    assert stats["signals_traded"] == 1
+    assert stats["open_count"] == 1
+    assert stats["closed_count"] == 0
+    assert stats["closed_win_count"] == 0
+    assert stats["closed_loss_count"] == 0
+    assert stats["win_rate_pct"] == Decimal("0")
+
+
 def test_stats_use_closed_trades_only_for_balance_and_win_rate() -> None:
     raw = {
         "start_balance_usdt": Decimal("1000"),

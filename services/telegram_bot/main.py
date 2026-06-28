@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC
 import logging
@@ -10,6 +10,9 @@ from typing import Any
 from aiogram import Bot, Dispatcher
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import redis.asyncio as redis
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ResponseError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from services.telegram_bot.constants import NOTIFY_STREAM
 from services.telegram_bot.handlers import config_from_app_config, create_router
@@ -29,6 +32,9 @@ from shared.config import load_config
 
 
 LOGGER = logging.getLogger(__name__)
+NOTIFY_BACKOFF_INITIAL_SEC = 1.0
+NOTIFY_BACKOFF_MAX_SEC = 30.0
+NOTIFY_TIMEOUT_LOG_INTERVAL_SEC = 60.0
 
 
 def create_dispatcher(
@@ -116,44 +122,252 @@ async def run() -> None:
         coalesce=True,
     )
     scheduler.start()
+    notify_config = app_config.file.telegram_bot
     notify_task = asyncio.create_task(
-        _consume_notifications(redis_client=redis_client, bot=bot),
-        name="notify-consumer",
+        _supervise_notifications(
+            redis_client=redis_client,
+            bot=bot,
+            group_name=notify_config.notify_group_name,
+            consumer_name=notify_config.notify_consumer_name,
+            read_count=notify_config.notify_read_count,
+            block_ms=notify_config.notify_block_ms,
+        ),
+        name="notify-consumer-supervisor",
     )
     LOGGER.info("service=telegram_bot status=started")
     try:
         await dispatcher.start_polling(bot)  # type: ignore[attr-defined]
     finally:
-        scheduler.shutdown(wait=False)
         notify_task.cancel()
         await asyncio.gather(notify_task, return_exceptions=True)
+        scheduler.shutdown(wait=False)
         await redis_client.aclose()
         await bot.session.close()
         engine.dispose()
         LOGGER.info("service=telegram_bot status=stopped")
 
 
-async def _consume_notifications(*, redis_client: Any, bot: Bot) -> None:
-    last_id = "$"
+async def _supervise_notifications(
+    *,
+    redis_client: Any,
+    bot: Bot,
+    group_name: str,
+    consumer_name: str,
+    read_count: int,
+    block_ms: int,
+) -> None:
+    restart_delay = NOTIFY_BACKOFF_INITIAL_SEC
     while True:
-        records = await redis_client.xread(
-            {NOTIFY_STREAM: last_id},
-            count=100,
-            block=5000,
+        LOGGER.info(
+            "stream=%s status=consumer_started group=%s consumer=%s",
+            NOTIFY_STREAM,
+            group_name,
+            consumer_name,
         )
-        for _stream, messages in records:
-            for message_id, fields in messages:
-                last_id = message_id
-                raw_event = fields.get("event")
-                if not isinstance(raw_event, str):
-                    LOGGER.warning("stream=notify status=invalid_fields")
-                    continue
-                try:
-                    await deliver_notify_event(bot=bot, raw_event_json=raw_event)
-                except ValueError:
-                    LOGGER.warning("stream=notify status=invalid_event")
-                except Exception:
-                    LOGGER.exception("stream=notify status=delivery_failed")
+        try:
+            await _consume_notifications(
+                redis_client=redis_client,
+                bot=bot,
+                group_name=group_name,
+                consumer_name=consumer_name,
+                read_count=read_count,
+                block_ms=block_ms,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            LOGGER.error(
+                "stream=%s status=consumer_stopped error_type=%s "
+                "restart_delay_sec=%s",
+                NOTIFY_STREAM,
+                type(error).__name__,
+                restart_delay,
+            )
+            await asyncio.sleep(restart_delay)
+            LOGGER.warning(
+                "stream=%s status=consumer_restarting",
+                NOTIFY_STREAM,
+            )
+            restart_delay = min(restart_delay * 2, NOTIFY_BACKOFF_MAX_SEC)
+
+
+async def _consume_notifications(
+    *,
+    redis_client: Any,
+    bot: Bot,
+    group_name: str = "telegram-bot-notify",
+    consumer_name: str = "telegram-bot-1",
+    read_count: int = 100,
+    block_ms: int = 5000,
+) -> None:
+    await _ensure_notify_consumer_group(redis_client=redis_client, group_name=group_name)
+    await _recover_pending_notifications(
+        redis_client=redis_client,
+        bot=bot,
+        group_name=group_name,
+        consumer_name=consumer_name,
+        read_count=read_count,
+    )
+    connection_delay = NOTIFY_BACKOFF_INITIAL_SEC
+    last_timeout_log_at: float | None = None
+    needs_pending_recovery = False
+
+    while True:
+        try:
+            if needs_pending_recovery:
+                await _recover_pending_notifications(
+                    redis_client=redis_client,
+                    bot=bot,
+                    group_name=group_name,
+                    consumer_name=consumer_name,
+                    read_count=read_count,
+                )
+                needs_pending_recovery = False
+            records = await redis_client.xreadgroup(
+                groupname=group_name,
+                consumername=consumer_name,
+                streams={NOTIFY_STREAM: ">"},
+                count=read_count,
+                block=block_ms,
+            )
+            connection_delay = NOTIFY_BACKOFF_INITIAL_SEC
+            for _stream, messages in records:
+                for message_id, fields in messages:
+                    await _process_notification_message(
+                        redis_client=redis_client,
+                        bot=bot,
+                        group_name=group_name,
+                        message_id=message_id,
+                        fields=fields,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except RedisTimeoutError:
+            needs_pending_recovery = True
+            now = asyncio.get_running_loop().time()
+            if (
+                last_timeout_log_at is None
+                or now - last_timeout_log_at >= NOTIFY_TIMEOUT_LOG_INTERVAL_SEC
+            ):
+                LOGGER.debug(
+                    "stream=%s status=waiting reason=redis_read_timeout",
+                    NOTIFY_STREAM,
+                )
+                last_timeout_log_at = now
+            continue
+        except RedisConnectionError:
+            needs_pending_recovery = True
+            LOGGER.warning(
+                "stream=%s status=connection_lost retry_delay_sec=%s",
+                NOTIFY_STREAM,
+                connection_delay,
+            )
+            await asyncio.sleep(connection_delay)
+            connection_delay = min(
+                connection_delay * 2,
+                NOTIFY_BACKOFF_MAX_SEC,
+            )
+            continue
+        except Exception as error:
+            LOGGER.error(
+                "stream=%s status=consumer_failed error_type=%s",
+                NOTIFY_STREAM,
+                type(error).__name__,
+            )
+            raise
+
+
+async def _ensure_notify_consumer_group(*, redis_client: Any, group_name: str) -> None:
+    try:
+        # "$" intentionally starts a newly created group after pre-group history.
+        await redis_client.xgroup_create(
+            name=NOTIFY_STREAM,
+            groupname=group_name,
+            id="$",
+            mkstream=True,
+        )
+    except ResponseError as error:
+        if "BUSYGROUP" not in str(error).upper():
+            raise
+
+
+async def _recover_pending_notifications(
+    *,
+    redis_client: Any,
+    bot: Bot,
+    group_name: str,
+    consumer_name: str,
+    read_count: int,
+) -> None:
+    while True:
+        pending = await redis_client.xpending_range(
+            name=NOTIFY_STREAM,
+            groupname=group_name,
+            min="-",
+            max="+",
+            count=read_count,
+            consumername=consumer_name,
+        )
+        message_ids = [
+            item.get("message_id")
+            for item in pending
+            if isinstance(item, Mapping) and item.get("message_id") is not None
+        ]
+        if not message_ids:
+            return
+        messages = await redis_client.xclaim(
+            name=NOTIFY_STREAM,
+            groupname=group_name,
+            consumername=consumer_name,
+            min_idle_time=0,
+            message_ids=message_ids,
+        )
+        if not messages:
+            return
+        for message_id, fields in messages:
+            await _process_notification_message(
+                redis_client=redis_client,
+                bot=bot,
+                group_name=group_name,
+                message_id=message_id,
+                fields=fields,
+            )
+
+
+async def _process_notification_message(
+    *,
+    redis_client: Any,
+    bot: Bot,
+    group_name: str,
+    message_id: Any,
+    fields: Any,
+) -> None:
+    raw_event = fields.get("event") if isinstance(fields, Mapping) else None
+    if not isinstance(raw_event, str):
+        LOGGER.warning("stream=%s status=poison_dropped reason=invalid_fields", NOTIFY_STREAM)
+        await redis_client.xack(NOTIFY_STREAM, group_name, message_id)
+        return
+    try:
+        event = await deliver_notify_event(bot=bot, raw_event_json=raw_event)
+    except asyncio.CancelledError:
+        raise
+    except ValueError:
+        LOGGER.warning("stream=%s status=poison_dropped reason=invalid_event", NOTIFY_STREAM)
+        await redis_client.xack(NOTIFY_STREAM, group_name, message_id)
+        return
+    except Exception as error:
+        LOGGER.error(
+            "stream=%s status=delivery_failed error_type=%s",
+            NOTIFY_STREAM,
+            type(error).__name__,
+        )
+        raise
+    await redis_client.xack(NOTIFY_STREAM, group_name, message_id)
+    LOGGER.info(
+        "event_type=%s telegram_id=%s status=delivered",
+        event.type,
+        event.payload["telegram_id"],
+    )
 
 
 def _required_secret(value: Any, name: str) -> str:

@@ -111,6 +111,9 @@ class FakeRepository:
             leverage_mode="signal",
         )
         self.created_users = 0
+        self.demo_account_calls = 0
+        self.demo_stats_calls = 0
+        self.demo_account = SimpleNamespace(user_id=self.user.id)
         self.credentials: tuple[bytes, bytes] | None = None
         self.payment: Payment | None = None
 
@@ -152,9 +155,11 @@ class FakeRepository:
         return subscription, self.payment
 
     def get_or_create_demo_account(self, **kwargs: Any) -> object:
-        return SimpleNamespace(user_id=self.user.id)
+        self.demo_account_calls += 1
+        return self.demo_account
 
     def get_demo_stats(self, user_id: int) -> dict[str, Any]:
+        self.demo_stats_calls += 1
         return {
             "start_balance_usdt": Decimal("1000"),
             "current_balance_usdt": Decimal("1000"),
@@ -304,7 +309,66 @@ def test_demo_handler_displays_stats() -> None:
         )
     )
 
-    assert "Demo stats" in message.answers[0]["text"]
+    text = message.answers[0]["text"]
+    assert "Demo account ENABLED" in text
+    assert "OPEN and CLOSE alerts for future signals" in text
+    assert "Demo stats" in text
+    callbacks = {
+        button.callback_data
+        for row in message.answers[0]["reply_markup"].inline_keyboard
+        for button in row
+    }
+    assert callbacks == {"main:demo", "main:menu"}
+
+
+def test_demo_refresh_reuses_idempotent_account_and_rebuilds_stats() -> None:
+    repository = FakeRepository()
+    callback = FakeCallback("main:demo")
+
+    asyncio.run(
+        handle_demo(
+            event=FakeMessage(),
+            repository_factory=lambda: repository,
+            config=_config(),
+        )
+    )
+    asyncio.run(
+        handle_demo(
+            event=callback,
+            repository_factory=lambda: repository,
+            config=_config(),
+        )
+    )
+
+    assert repository.demo_account_calls == 2
+    assert callback.message.edits[0]["text"].endswith("Net profit: +0.00 USDT (+0.0%)")
+    assert callback.acks == [{"text": None, "show_alert": False}]
+
+
+def test_demo_refresh_acknowledges_unchanged_stats_without_invalid_edit() -> None:
+    repository = FakeRepository()
+    message = FakeMessage()
+    asyncio.run(
+        handle_demo(
+            event=message,
+            repository_factory=lambda: repository,
+            config=_config(),
+        )
+    )
+    callback = FakeCallback("main:demo")
+    callback.message.text = message.answers[0]["text"]
+
+    asyncio.run(
+        handle_demo(
+            event=callback,
+            repository_factory=lambda: repository,
+            config=_config(),
+        )
+    )
+
+    assert repository.demo_stats_calls == 2
+    assert callback.message.edits == []
+    assert callback.acks == [{"text": None, "show_alert": False}]
 
 
 def test_settings_risk_model_callback_updates_model() -> None:

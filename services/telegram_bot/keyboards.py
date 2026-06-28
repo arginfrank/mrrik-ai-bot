@@ -18,6 +18,7 @@ from services.telegram_bot.constants import (
     CALLBACK_SETTINGS_PREFIX,
     SUPPORTED_PAYMENT_NETWORKS,
 )
+from services.telegram_bot.i18n import t
 from shared.models import Plan
 
 
@@ -128,6 +129,20 @@ def settings_keyboard() -> InlineKeyboardMarkup:
 
 def back_to_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[_back_button()]])
+
+
+def demo_stats_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t("demo_refresh_button"),
+                    callback_data=f"{CALLBACK_MAIN_PREFIX}demo",
+                )
+            ],
+            [_back_button()],
+        ]
+    )
 
 
 def _back_button() -> InlineKeyboardButton:

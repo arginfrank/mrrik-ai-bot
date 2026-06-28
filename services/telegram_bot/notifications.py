@@ -28,10 +28,11 @@ async def deliver_notify_payload(*, bot: Bot, payload: dict[str, Any]) -> None:
     await bot.send_message(chat_id=telegram_id, text=text)
 
 
-async def deliver_notify_event(*, bot: Bot, raw_event_json: str) -> None:
+async def deliver_notify_event(*, bot: Bot, raw_event_json: str) -> EventEnvelope:
     """Parse and deliver one notify event."""
     event = parse_notify_event(raw_event_json)
     await deliver_notify_payload(bot=bot, payload=event.payload)
+    return event
 
 
 def _validated_delivery_values(payload: dict[str, Any]) -> tuple[int, str]:
