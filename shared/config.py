@@ -55,6 +55,13 @@ class DemoConfig(BaseModel):
     taker_fee_pct: Decimal = Decimal("0.04")
 
 
+class TelegramBotServiceConfig(BaseModel):
+    notify_group_name: str = "telegram-bot-notify"
+    notify_consumer_name: str = "telegram-bot-1"
+    notify_read_count: int = Field(default=100, ge=1)
+    notify_block_ms: int = Field(default=5000, ge=1)
+
+
 class PaymentNetworkConfig(BaseModel):
     usdt_contract: str
     decimals: int
@@ -114,6 +121,9 @@ class FileConfig(BaseModel):
     execution: ExecutionConfig
     sanitizer: SanitizerConfig
     demo: DemoConfig
+    telegram_bot: TelegramBotServiceConfig = Field(
+        default_factory=TelegramBotServiceConfig
+    )
     payment_precheck: PaymentPrecheckConfig
     admin_panel: AdminPanelConfig
     retry: RetryConfig = Field(default_factory=RetryConfig)

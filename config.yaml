@@ -34,6 +34,12 @@ demo:
   include_slippage: false
   taker_fee_pct: 0.04
 
+telegram_bot:
+  notify_group_name: telegram-bot-notify
+  notify_consumer_name: telegram-bot-1
+  notify_read_count: 100
+  notify_block_ms: 5000
+
 payment_precheck:
   trc20:
     usdt_contract: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
