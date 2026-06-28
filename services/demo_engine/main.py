@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 import redis.asyncio as redis
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from services.demo_engine.engine import (
     SIGNALS_STREAM,
@@ -25,6 +26,7 @@ from shared.config import load_config
 
 LOGGER = logging.getLogger(__name__)
 SYMBOL_POLL_INTERVAL_SEC = 3
+REDIS_TIMEOUT_RETRY_DELAY_SEC = 0.1
 
 
 async def run() -> None:
@@ -68,11 +70,26 @@ async def _consume_signals(
 ) -> None:
     last_id = "$"
     while True:
-        records = await redis_client.xread(
-            {SIGNALS_STREAM: last_id},
-            count=100,
-            block=5000,
-        )
+        try:
+            records = await redis_client.xread(
+                {SIGNALS_STREAM: last_id},
+                count=100,
+                block=5000,
+            )
+        except asyncio.CancelledError:
+            raise
+        except RedisTimeoutError:
+            LOGGER.debug(
+                "event_type=signal.created status=waiting reason=redis_read_timeout"
+            )
+            await asyncio.sleep(REDIS_TIMEOUT_RETRY_DELAY_SEC)
+            continue
+        except Exception:
+            LOGGER.exception(
+                "event_type=signal.created status=read_failed stream=%s",
+                SIGNALS_STREAM,
+            )
+            raise
         for _stream, messages in records:
             for message_id, fields in messages:
                 last_id = message_id
