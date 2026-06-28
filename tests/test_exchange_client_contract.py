@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 
+import websockets
+
 from shared.exchange.binance import (
+    BinanceFuturesClient,
     parse_exchange_order,
     parse_user_stream_event,
     to_binance_order_side,
@@ -28,6 +32,20 @@ class FakeExchangeClient:
             min_qty=Decimal("1"),
             min_notional=Decimal("5"),
         )
+
+
+class EmptyWebSocket:
+    async def __aenter__(self) -> EmptyWebSocket:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    def __aiter__(self) -> EmptyWebSocket:
+        return self
+
+    async def __anext__(self) -> str:
+        raise StopAsyncIteration
 
 
 def test_fake_client_exposes_exchange_contract_methods() -> None:
@@ -92,3 +110,28 @@ def test_order_side_mapping() -> None:
     assert to_binance_order_side(trade_side="LONG", action="close") == "SELL"
     assert to_binance_order_side(trade_side="SHORT", action="open") == "SELL"
     assert to_binance_order_side(trade_side="SHORT", action="close") == "BUY"
+
+
+def test_mark_price_stream_uses_production_market_route(monkeypatch) -> None:
+    connected_urls: list[str] = []
+
+    def connect(url: str) -> EmptyWebSocket:
+        connected_urls.append(url)
+        return EmptyWebSocket()
+
+    monkeypatch.setattr(websockets, "connect", connect)
+    client = BinanceFuturesClient(api_key="", api_secret="")
+
+    async def consume_stream() -> None:
+        async for _ in client.mark_price_stream(["ETHUSDT", "BTCUSDT", "ETHUSDT"]):
+            pass
+
+    asyncio.run(consume_stream())
+
+    assert connected_urls == [
+        "wss://fstream.binance.com/market/stream?streams="
+        "btcusdt@markPrice@1s/ethusdt@markPrice@1s"
+    ]
+    assert not connected_urls[0].startswith(
+        "wss://fstream.binance.com/stream?streams="
+    )
