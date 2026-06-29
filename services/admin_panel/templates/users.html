@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Accounts</p><h1>Users</h1></div></div>
+<section class="panel table-panel"><div class="table-wrap"><table>
+  <thead><tr><th>User</th><th>Telegram ID</th><th>Subscription</th><th>Credentials valid</th><th>Risk model</th><th>Demo balance</th><th>Demo W/L/Open</th><th>Access</th></tr></thead>
+  <tbody>
+  {% for row in users %}{% set user = row.user if row.user is defined else row %}
+    <tr>
+      <td><a href="/users/{{ user.id }}">{{ '@' + user.username if user.username else 'Unnamed user' }}</a></td>
+      <td class="mono">{{ user.telegram_id }}</td>
+      <td><span class="badge status-{{ row.subscription_status|default('none') }}">{{ row.subscription_status|default('none') }}</span><small class="subline">{{ row.subscription_ends_at|default(None)|utc }}</small></td>
+      <td><span class="boolean {{ 'yes' if row.credential_valid|default(false) else 'no' }}">{{ 'Yes' if row.credential_valid|default(false) else 'No' }}</span></td>
+      <td>{{ row.risk_model|default('—', true) }}</td>
+      <td>{{ row.demo_balance_usdt|default(None)|money }}{% if row.demo_balance_usdt|default(None) is not none %} USDT{% endif %}</td>
+      <td>{{ row.demo_wins|default(0) }}/{{ row.demo_losses|default(0) }}/{{ row.demo_open_trades|default(0) }}</td>
+      <td><span class="badge {{ 'danger-badge' if user.is_blocked else 'good-badge' }}">{{ 'Blocked' if user.is_blocked else 'Allowed' }}</span></td>
+    </tr>
+  {% else %}<tr><td colspan="8" class="empty">No users yet.</td></tr>{% endfor %}
+  </tbody>
+</table></div></section>
+{% endblock %}

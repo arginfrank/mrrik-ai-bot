@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Trades{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Execution visibility</p><h1>Trades</h1></div></div>
+<div class="tabs"><a class="{{ 'active' if tab == 'live' else '' }}" href="/trades?tab=live">Live</a><a class="{{ 'active' if tab == 'history' else '' }}" href="/trades?tab=history">History</a></div>
+<form method="get" class="filter-bar"><input type="hidden" name="tab" value="{{ tab }}"><label>User ID<input name="user_id" type="number" min="1" value="{{ filters.user_id }}"></label><label>Symbol<input name="symbol" value="{{ filters.symbol }}" placeholder="BTCUSDT"></label><label>From<input name="date_from" type="date" value="{{ filters.date_from }}"></label><label>To<input name="date_to" type="date" value="{{ filters.date_to }}"></label><button class="button secondary" type="submit">Filter</button></form>
+{% if tab == 'history' %}<section class="panel chart-panel"><div class="panel-heading"><h2>Cumulative realized PnL</h2></div><canvas id="pnl-chart" height="180" aria-label="Cumulative realized PnL chart"></canvas><script id="pnl-data" type="application/json">{{ pnl_points_json|safe }}</script></section>{% endif %}
+<section class="panel table-panel"><div class="table-wrap"><table>
+{% if tab == 'live' %}
+  <thead><tr><th>Trade</th><th>User</th><th>Position</th><th>Latest price</th><th>Filled legs</th><th>Current SL / TP</th><th>Liquidation</th></tr></thead>
+  <tbody>{% for trade in trades %}<tr><td>#{{ trade.id }}<small class="subline">{{ trade.opened_at|utc }}</small></td><td><a href="/users/{{ trade.user_id }}">{{ trade.user.username if trade.user and trade.user.username else trade.user_id }}</a></td><td>{{ trade.side }} {{ trade.symbol }}<small class="subline">{{ trade.leverage }}× · {{ trade.margin_usdt|money }} USDT margin</small></td><td><span class="muted">Not persisted</span></td><td>{% for leg in trade.legs %}<span class="leg {{ leg.status }}">TP{{ leg.leg_index }} {{ leg.status }}</span>{% endfor %}</td><td>SL {{ trade.signal.stop_loss|price if trade.signal else '—' }}<small class="subline">{% for leg in trade.legs if leg.status == 'open' %}TP{{ leg.leg_index }} {{ leg.target_price|price }}{% if not loop.last %}, {% endif %}{% else %}No open TP legs{% endfor %}</small></td><td>{{ trade.liq_price|price }}<small class="subline">Distance unavailable without a persisted mark price</small></td></tr>{% else %}<tr><td colspan="7" class="empty">No live trades match the filters.</td></tr>{% endfor %}</tbody>
+{% else %}
+  <thead><tr><th>Trade</th><th>User</th><th>Position</th><th>Closed reason</th><th>Realized PnL</th><th>ROI</th><th>Duration</th></tr></thead>
+  <tbody>{% for trade in trades %}<tr><td>#{{ trade.id }}<small class="subline">{{ trade.closed_at|utc }}</small></td><td><a href="/users/{{ trade.user_id }}">{{ trade.user.username if trade.user and trade.user.username else trade.user_id }}</a></td><td>{{ trade.side }} {{ trade.symbol }}<small class="subline">{{ trade.leverage }}×</small></td><td>{{ trade.closed_reason or '—' }}</td><td class="{{ 'positive' if (trade.realized_pnl_usdt or 0) >= 0 else 'negative' }}">{{ trade.realized_pnl_usdt|money }} USDT</td><td>{{ trade.realized_roi_pct|money }}%</td><td>{{ (trade.closed_at - trade.opened_at)|duration if trade.closed_at and trade.opened_at else '—' }}</td></tr>{% else %}<tr><td colspan="7" class="empty">No historical trades match the filters.</td></tr>{% endfor %}</tbody>
+{% endif %}
+</table></div></section>
+{% endblock %}

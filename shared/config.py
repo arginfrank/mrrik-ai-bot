@@ -76,7 +76,12 @@ class PaymentPrecheckConfig(BaseModel):
 
 
 class AdminPanelConfig(BaseModel):
+    bind_host: str = "127.0.0.1"
+    auth_mode: Literal["telegram_login", "bootstrap_token"] = "telegram_login"
+    session_ttl_sec: int = Field(default=43_200, gt=0)
+    telegram_auth_max_age_sec: int = Field(default=86_400, gt=0)
     ip_allowlist: list[str] = Field(default_factory=lambda: ["127.0.0.1", "::1"])
+    require_ip_allowlist: bool = False
 
 
 class RetryConfig(BaseModel):
@@ -148,6 +153,7 @@ class EnvSettings(BaseSettings):
     tg_userbot_session: SecretStr | None = None
     source_channel_id: int | None = None
     admin_telegram_ids: str | None = None
+    admin_bootstrap_token: SecretStr | None = None
     database_url: str = "postgresql+psycopg://mrrik:mrrik@localhost:5432/mrrik"
     redis_url: str = "redis://localhost:6379/0"
     fernet_key: SecretStr | None = None

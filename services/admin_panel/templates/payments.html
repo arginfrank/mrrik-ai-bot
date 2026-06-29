@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Payments{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow">Subscriptions</p><h1>Payments</h1></div>
+  <form method="get" class="inline-form"><label for="status">Status</label><select id="status" name="status" onchange="this.form.submit()"><option value="submitted" {{ 'selected' if payment_status == 'submitted' else '' }}>Submitted</option><option value="approved" {{ 'selected' if payment_status == 'approved' else '' }}>Approved</option><option value="rejected" {{ 'selected' if payment_status == 'rejected' else '' }}>Rejected</option><option value="all" {{ 'selected' if payment_status == 'all' else '' }}>All</option></select></form>
+</div>
+<section class="panel table-panel">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>User</th><th>Plan</th><th>Amount</th><th>Network</th><th>Transaction</th><th>Precheck</th><th>Submitted</th><th>Actions</th></tr></thead>
+      <tbody>
+      {% for payment in payments %}
+        <tr>
+          <td><a href="/users/{{ payment.user_id }}">{{ payment.user.username if payment.user and payment.user.username else payment.user_id }}</a><small class="subline">ID {{ payment.user.telegram_id if payment.user else '—' }}</small></td>
+          <td>{{ payment.plan.code if payment.plan else payment.plan_id }}</td>
+          <td>{{ payment.amount_expected|money }} USDT</td>
+          <td><span class="badge neutral">{{ payment.network }}</span></td>
+          <td>{% set explorer = payment_explorer_url(payment) %}{% if explorer %}<a class="mono" href="{{ explorer }}" target="_blank" rel="noopener noreferrer">{{ payment.txid|short_txid }}</a>{% else %}<span class="mono">{{ payment.txid|short_txid }}</span>{% endif %}</td>
+          <td><span class="badge precheck-{{ payment.precheck_result or 'unknown' }}">{{ payment.precheck_result or 'unknown' }}</span></td>
+          <td>{{ payment.created_at|utc }}</td>
+          <td class="actions">
+          {% if payment.status == 'submitted' %}
+            <button class="button small success" data-action="/payments/{{ payment.id }}/approve">Approve</button>
+            <button class="button small ghost-danger" data-action="/payments/{{ payment.id }}/reject" data-reason="true">Reject</button>
+          {% else %}<span class="muted">{{ payment.status }}</span>{% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="empty">No payments in this view.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

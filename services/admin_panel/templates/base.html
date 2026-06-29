@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Admin{% endblock %} · MRRIK AI bot</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/admin.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/overview"><span class="brand-mark">M</span><span>MRRIK <small>ADMIN</small></span></a>
+      <nav aria-label="Admin sections">
+        <a href="/overview" class="{{ 'active' if active_page == 'overview' else '' }}">Overview</a>
+        <a href="/payments" class="{{ 'active' if active_page == 'payments' else '' }}">Payments</a>
+        <a href="/users" class="{{ 'active' if active_page == 'users' else '' }}">Users</a>
+        <a href="/trades" class="{{ 'active' if active_page == 'trades' else '' }}">Trades</a>
+        <a href="/signals" class="{{ 'active' if active_page == 'signals' else '' }}">Signals &amp; anomalies</a>
+        <a href="/system" class="{{ 'active' if active_page == 'system' else '' }}">System &amp; kill-switch</a>
+      </nav>
+      <form action="/logout" method="post" class="logout-form">
+        <button class="link-button" type="submit">Log out</button>
+      </form>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="health-strip" aria-label="Service health">
+          {% for service in service_health %}
+          <span class="health-item" title="{{ service.name }}: {{ 'healthy' if service.ok else 'unhealthy' }}">
+            <span class="dot {{ 'ok' if service.ok else 'bad' }}"></span>{{ service.name.replace('_', ' ') }}
+          </span>
+          {% endfor %}
+        </div>
+        <button
+          class="button {{ 'secondary' if global_paused else 'danger' }}"
+          data-action="/kill-switch/global/{{ 'off' if global_paused else 'on' }}"
+          {% if not global_paused %}data-danger="pause"{% endif %}
+        >{{ 'Resume new trades' if global_paused else 'Pause new trades' }}</button>
+      </header>
+      <main>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="{{ url_for('static', path='/admin.js') }}" defer></script>
+</body>
+</html>

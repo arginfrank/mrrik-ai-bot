@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}System & kill-switch{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Operations</p><h1>System &amp; kill-switch</h1></div></div>
+<section class="detail-grid">
+{% for service in service_health %}<article class="panel compact"><p class="eyebrow">Service</p><h2><span class="dot {{ 'ok' if service.ok else 'bad' }}"></span>{{ service.name.replace('_', ' ') }}</h2><p>{{ 'Healthy' if service.ok else 'Needs attention' }}</p></article>{% endfor %}
+</section>
+<section class="panel danger-zone"><div><p class="eyebrow">Danger zone</p><h2>Pause all new trades</h2><p>This changes only admission of new trades. Existing positions continue their own lifecycle.</p></div><button class="button {{ 'secondary' if global_paused else 'danger' }}" data-action="/kill-switch/global/{{ 'off' if global_paused else 'on' }}" {% if not global_paused %}data-danger="pause"{% endif %}>{{ 'Resume new trades' if global_paused else 'Pause all new trades' }}</button></section>
+<section class="panel"><div class="panel-heading"><div><p class="eyebrow">Read-only safeguards</p><h2>Trading environment</h2></div></div><dl class="status-list"><div><dt>Global pause</dt><dd><span class="badge {{ 'danger-badge' if global_paused else 'good-badge' }}">{{ 'Paused' if global_paused else 'Running' }}</span></dd></div><div><dt>Testnet</dt><dd>{{ 'Enabled' if testnet_enabled else 'Disabled' }}</dd></div><div><dt>Live trading</dt><dd>{{ live_trading_status }}</dd></div><div><dt>Live canary</dt><dd>{{ 'Enabled' if live_canary_enabled else 'Disabled' }}</dd></div></dl><p class="muted">Environment status is read-only here. This panel cannot enable testnet, canary, or live trading.</p></section>
+{% endblock %}

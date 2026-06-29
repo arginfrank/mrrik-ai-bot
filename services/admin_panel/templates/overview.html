@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow">At a glance</p><h1>Overview</h1></div>
+  <span class="utc-note">All times UTC</span>
+</div>
+<section class="metric-grid" aria-label="System summary">
+  <article class="metric"><span>Active users</span><strong>{{ metrics.active_users }}</strong></article>
+  <article class="metric"><span>Subscriptions</span><strong>{{ metrics.active_subscriptions }}</strong><small>{{ metrics.expired_subscriptions }} expired</small></article>
+  <article class="metric"><span>Pending payments</span><strong>{{ metrics.pending_payments }}</strong>{% if metrics.pending_payments %}<b class="boolean danger-badge">Review</b>{% endif %}</article>
+  <article class="metric"><span>Open trades</span><strong>{{ metrics.open_trades }}</strong></article>
+  <article class="metric"><span>Realized PnL today</span><strong class="{{ 'positive' if metrics.realized_pnl_today >= 0 else 'negative' }}">{{ metrics.realized_pnl_today|money }} USDT</strong></article>
+  <article class="metric"><span>Realized PnL · 7 days</span><strong class="{{ 'positive' if metrics.realized_pnl_7d >= 0 else 'negative' }}">{{ metrics.realized_pnl_7d|money }} USDT</strong></article>
+</section>
+<section class="panel">
+  <div class="panel-heading"><div><p class="eyebrow">Audit trail</p><h2>Latest important events</h2></div></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Entity</th></tr></thead>
+      <tbody>
+      {% for event in events %}
+        <tr><td>{{ event.ts|utc }}</td><td>{{ event.actor or 'system' }}</td><td><span class="mono-label">{{ event.action }}</span></td><td>{{ event.entity }} #{{ event.entity_id }}</td></tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">No audited events yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

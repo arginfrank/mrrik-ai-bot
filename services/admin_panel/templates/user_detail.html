@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}User {{ user.telegram_id }}{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><a class="back" href="/users">← Users</a><h1>{{ '@' + user.username if user.username else 'User ' + user.telegram_id|string }}</h1><p class="muted mono">Telegram ID {{ user.telegram_id }}</p></div>
+  <div class="actions">
+    <button class="button {{ 'secondary' if user.is_blocked else 'ghost-danger' }}" data-action="/users/{{ user.id }}/block/{{ 'off' if user.is_blocked else 'on' }}">{{ 'Unblock user' if user.is_blocked else 'Block user' }}</button>
+    <button class="button {{ 'secondary' if user_paused else 'danger' }}" data-action="/kill-switch/user/{{ user.id }}/{{ 'off' if user_paused else 'on' }}" {% if not user_paused %}data-danger="pause"{% endif %}>{{ 'Resume new trades' if user_paused else 'Pause user trades' }}</button>
+  </div>
+</div>
+<section class="detail-grid">
+  <article class="panel compact"><p class="eyebrow">Subscription</p>{% set subscription = user.subscriptions|sort(attribute='created_at', reverse=true)|first if user.subscriptions else none %}<h2>{{ subscription.status if subscription else 'None' }}</h2><p>{{ subscription.ends_at|utc if subscription else 'No end date' }}</p></article>
+  <article class="panel compact"><p class="eyebrow">Exchange credential</p>{% set credential = user.exchange_credentials|first if user.exchange_credentials else none %}<h2>{{ 'Valid' if credential and credential.is_valid else 'Not valid' }}</h2><p>Credential material is never shown.</p></article>
+  <article class="panel compact"><p class="eyebrow">Risk model</p><h2>{{ user.settings.risk_model if user.settings else 'Default' }}</h2><p>Risk settings are managed in configuration.</p></article>
+  <article class="panel compact"><p class="eyebrow">Demo</p><h2>{{ user.demo_account.balance_usdt|money if user.demo_account else 'Not started' }}</h2><p>{{ user.demo_trades|length }} demo trades</p></article>
+</section>
+<section class="panel"><div class="panel-heading"><h2>Real trades</h2></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Status</th><th>PnL</th><th>Opened</th><th>Closed</th></tr></thead><tbody>{% for trade in user.trades %}<tr><td>{{ trade.id }}</td><td>{{ trade.symbol }}</td><td>{{ trade.side }}</td><td>{{ trade.status }}</td><td>{{ trade.realized_pnl_usdt|money }}</td><td>{{ trade.opened_at|utc }}</td><td>{{ trade.closed_at|utc }}</td></tr>{% else %}<tr><td colspan="7" class="empty">No real trades.</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="panel"><div class="panel-heading"><h2>Demo trades</h2></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Status</th><th>PnL</th><th>Closed reason</th></tr></thead><tbody>{% for trade in user.demo_trades %}<tr><td>{{ trade.id }}</td><td>{{ trade.symbol }}</td><td>{{ trade.side }}</td><td>{{ trade.status }}</td><td>{{ trade.realized_pnl_usdt|money }}</td><td>{{ trade.closed_reason or '—' }}</td></tr>{% else %}<tr><td colspan="6" class="empty">No demo trades.</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="panel"><div class="panel-heading"><h2>Payment history</h2></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Plan</th><th>Network</th><th>Amount</th><th>Status</th><th>Submitted</th></tr></thead><tbody>{% for payment in user.payments %}<tr><td>{{ payment.id }}</td><td>{{ payment.plan.code if payment.plan else payment.plan_id }}</td><td>{{ payment.network }}</td><td>{{ payment.amount_expected|money }} USDT</td><td>{{ payment.status }}</td><td>{{ payment.created_at|utc }}</td></tr>{% else %}<tr><td colspan="6" class="empty">No payments.</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

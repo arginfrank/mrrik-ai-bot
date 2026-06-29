@@ -66,9 +66,27 @@ def config_from_app_config(app_config: object) -> dict[str, Any]:
             api_base_url="https://api.polygonscan.com/api",
         ),
     }
+    auth_mode = file_config.admin_panel.auth_mode
+    bot_token = _secret_value(env_config.telegram_bot_token)
+    bootstrap_token = _secret_value(env_config.admin_bootstrap_token)
+    signing_secret = bot_token if auth_mode == "telegram_login" else bootstrap_token
     return {
         "admin_telegram_ids": parse_admin_telegram_ids(env_config.admin_telegram_ids),
+        "auth_mode": auth_mode,
+        "bind_host": file_config.admin_panel.bind_host,
+        "session_ttl_sec": file_config.admin_panel.session_ttl_sec,
+        "telegram_auth_max_age_sec": (
+            file_config.admin_panel.telegram_auth_max_age_sec
+        ),
+        "telegram_bot_token": bot_token,
+        "admin_bootstrap_token": bootstrap_token,
+        "session_signing_secret": (
+            f"mrrik-admin-session:{signing_secret}" if signing_secret else ""
+        ),
         "ip_allowlist": list(file_config.admin_panel.ip_allowlist),
+        "require_ip_allowlist": file_config.admin_panel.require_ip_allowlist,
+        "testnet_enabled": file_config.testnet.enabled,
+        "live_canary_enabled": file_config.live_canary.enabled,
         "expected_wallets_by_network": wallets,
         "token_contracts_by_network": token_contracts,
         "min_confirmations_by_network": confirmations,
