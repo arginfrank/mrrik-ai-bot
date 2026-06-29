@@ -45,6 +45,10 @@ class SignalRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def commit(self) -> None:
+        """Commit persisted signals before their stream event is published."""
+        self._session.commit()
+
     def create_accepted_signal(
         self,
         *,

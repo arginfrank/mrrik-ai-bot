@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 import logging
 from typing import Any
 
 import redis.asyncio as redis
+from redis.exceptions import ResponseError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from services.demo_engine.engine import (
@@ -27,6 +29,8 @@ from shared.config import load_config
 LOGGER = logging.getLogger(__name__)
 SYMBOL_POLL_INTERVAL_SEC = 3
 REDIS_TIMEOUT_RETRY_DELAY_SEC = 0.1
+SIGNALS_GROUP_NAME = "demo-engine-signals"
+SIGNALS_CONSUMER_NAME = "demo-engine-1"
 
 
 async def run() -> None:
@@ -67,14 +71,21 @@ async def _consume_signals(
     session_factory: Any,
     publisher: RedisStreamPublisher,
     config: Any,
+    group_name: str = SIGNALS_GROUP_NAME,
+    consumer_name: str = SIGNALS_CONSUMER_NAME,
 ) -> None:
-    last_id = "$"
+    await _ensure_signal_consumer_group(
+        redis_client=redis_client,
+        group_name=group_name,
+    )
+    read_pending = True
     while True:
         try:
-            records = await redis_client.xread(
-                {SIGNALS_STREAM: last_id},
-                count=100,
-                block=5000,
+            records, read_pending = await _read_signal_records(
+                redis_client=redis_client,
+                group_name=group_name,
+                consumer_name=consumer_name,
+                read_pending=read_pending,
             )
         except asyncio.CancelledError:
             raise
@@ -92,15 +103,17 @@ async def _consume_signals(
             raise
         for _stream, messages in records:
             for message_id, fields in messages:
-                last_id = message_id
-                raw_event = fields.get("event")
+                raw_event = fields.get("event") if isinstance(fields, Mapping) else None
                 if not isinstance(raw_event, str):
+                    await redis_client.xack(SIGNALS_STREAM, group_name, message_id)
                     continue
                 try:
                     event = event_from_json(raw_event)
                 except ValueError:
+                    await redis_client.xack(SIGNALS_STREAM, group_name, message_id)
                     continue
                 if event.type != "signal.created":
+                    await redis_client.xack(SIGNALS_STREAM, group_name, message_id)
                     continue
                 try:
                     with session_scope(session_factory) as session:
@@ -116,6 +129,14 @@ async def _consume_signals(
                         event.payload.get("signal_id"),
                     )
                     continue
+                if result.status == "retry" and result.ignored_reason == "signal_not_found":
+                    LOGGER.warning(
+                        "event_type=signal.created signal_id=%s status=retry "
+                        "reason=signal_not_found acknowledged=false",
+                        event.payload.get("signal_id"),
+                    )
+                    continue
+                await redis_client.xack(SIGNALS_STREAM, group_name, message_id)
                 LOGGER.info(
                     "event_type=signal.created signal_id=%s status=%s "
                     "opened_count=%s ignored_reason=%s",
@@ -124,6 +145,47 @@ async def _consume_signals(
                     result.opened_count,
                     result.ignored_reason or "-",
                 )
+
+
+async def _ensure_signal_consumer_group(
+    *, redis_client: Any, group_name: str
+) -> None:
+    try:
+        await redis_client.xgroup_create(
+            name=SIGNALS_STREAM,
+            groupname=group_name,
+            id="$",
+            mkstream=True,
+        )
+    except ResponseError as error:
+        if "BUSYGROUP" not in str(error).upper():
+            raise
+
+
+async def _read_signal_records(
+    *,
+    redis_client: Any,
+    group_name: str,
+    consumer_name: str,
+    read_pending: bool,
+) -> tuple[Any, bool]:
+    if read_pending:
+        pending = await redis_client.xreadgroup(
+            groupname=group_name,
+            consumername=consumer_name,
+            streams={SIGNALS_STREAM: "0"},
+            count=100,
+        )
+        if pending:
+            return pending, False
+    fresh = await redis_client.xreadgroup(
+        groupname=group_name,
+        consumername=consumer_name,
+        streams={SIGNALS_STREAM: ">"},
+        count=100,
+        block=5000,
+    )
+    return fresh, True
 
 
 async def _track_prices(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
+import logging
 from typing import Protocol
 
 from services.signal_ingestor.events import (
@@ -14,6 +15,7 @@ from shared.signal.types import MessageKind, ParsedEntrySignal, RejectedSignal
 
 
 SIGNALS_STREAM = "signals"
+LOGGER = logging.getLogger(__name__)
 
 
 class SignalEventPublisher(Protocol):
@@ -76,15 +78,19 @@ async def process_source_message(
             rejection=sanitized,
             source_msg_id=source_msg_id,
         )
-        await publisher.publish(
+        payload = build_signal_rejected_payload(
+            source_msg_id=source_msg_id,
+            signal_id=signal.id,
+            symbol=parsed.symbol,
+            reason=sanitized.reason,
+        )
+        repository.commit()  # type: ignore[attr-defined]
+        await _publish_persisted_event(
+            publisher=publisher,
             stream=SIGNALS_STREAM,
             event_type="signal.rejected",
-            payload=build_signal_rejected_payload(
-                source_msg_id=source_msg_id,
-                signal_id=signal.id,
-                symbol=parsed.symbol,
-                reason=sanitized.reason,
-            ),
+            payload=payload,
+            signal_id=signal.id,
         )
         return IngestResult(
             status="rejected",
@@ -98,13 +104,40 @@ async def process_source_message(
         sanitized=sanitized,
         source_msg_id=source_msg_id,
     )
-    await publisher.publish(
+    payload = build_signal_created_payload(signal)
+    repository.commit()  # type: ignore[attr-defined]
+    await _publish_persisted_event(
+        publisher=publisher,
         stream=SIGNALS_STREAM,
         event_type="signal.created",
-        payload=build_signal_created_payload(signal),
+        payload=payload,
+        signal_id=signal.id,
     )
     return IngestResult(
         status="created",
         event_type="signal.created",
         signal_id=signal.id,
     )
+
+
+async def _publish_persisted_event(
+    *,
+    publisher: SignalEventPublisher,
+    stream: str,
+    event_type: str,
+    payload: dict,
+    signal_id: int,
+) -> None:
+    try:
+        await publisher.publish(
+            stream=stream,
+            event_type=event_type,
+            payload=payload,
+        )
+    except Exception:
+        LOGGER.error(
+            "event_type=%s signal_id=%s status=publish_failed persisted=true",
+            event_type,
+            signal_id,
+        )
+        raise

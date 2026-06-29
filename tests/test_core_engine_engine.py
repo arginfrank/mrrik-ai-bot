@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
@@ -160,7 +161,14 @@ class FakeRepository:
         return self.subscription
 
     def has_open_trade_for_signal(self, **values: object) -> bool:
-        return self.duplicate
+        return self.duplicate or (
+            self.trade is not None
+            and self.trade.status in {"pending_entry", "open"}
+            and (
+                self.trade.signal_id == values["signal_id"]
+                or self.trade.signal is self.signal
+            )
+        )
 
     def get_user_settings(self, user_id: int):
         return self.settings
@@ -261,6 +269,78 @@ def test_signal_opens_trade_and_duplicate_event_is_ignored() -> None:
     assert repository.trade is not None and repository.trade.status == "open"
     assert {event[1] for event in publisher.events} == {"trade.opened", "notify.user"}
     assert duplicate.ignored_reason == "duplicate event"
+
+
+def test_signal_created_retries_until_signal_becomes_visible() -> None:
+    key = Fernet.generate_key().decode()
+    repository = FakeRepository(key)
+    real_get_signal = repository.get_signal
+    reads = 0
+
+    def delayed_get_signal(signal_id: int) -> Signal | None:
+        nonlocal reads
+        reads += 1
+        return None if reads == 1 else real_get_signal(signal_id)
+
+    repository.get_signal = delayed_get_signal  # type: ignore[method-assign]
+    publisher = FakePublisher()
+    result = asyncio.run(
+        handle_signal_created(
+            event_id=str(uuid4()),
+            payload={"signal_id": 1},
+            repository=repository,
+            exchange_factory=FakeFactory(FakeExchange()),
+            publisher=publisher,
+            config=replace(CONFIG, signal_lookup_retry_delays_sec=(0, 0, 0)),
+            fernet_key=key,
+        )
+    )
+
+    assert result.opened_count == 1
+    assert reads == 2
+
+
+def test_missing_signal_is_transient_and_event_is_not_marked_processed() -> None:
+    key = Fernet.generate_key().decode()
+    repository = FakeRepository(key)
+    reads = 0
+
+    def missing_signal(_signal_id: int) -> None:
+        nonlocal reads
+        reads += 1
+        return None
+
+    repository.get_signal = missing_signal  # type: ignore[method-assign]
+    result = asyncio.run(
+        handle_signal_created(
+            event_id=str(uuid4()),
+            payload={"signal_id": 1},
+            repository=repository,
+            exchange_factory=FakeFactory(FakeExchange()),
+            publisher=FakePublisher(),
+            config=replace(CONFIG, signal_lookup_retry_delays_sec=(0, 0, 0)),
+            fernet_key=key,
+        )
+    )
+
+    assert result.status == "retry"
+    assert result.ignored_reason == "signal_not_found"
+    assert reads == 4
+    assert repository.processed == set()
+
+
+def test_repeated_signal_with_different_event_id_does_not_open_twice() -> None:
+    key = Fernet.generate_key().decode()
+    repository = FakeRepository(key)
+    first, _ = _handle(repository, FakeExchange(), key)
+    first_trade = repository.trade
+    repeated, publisher = _handle(repository, FakeExchange(), key)
+
+    assert first.opened_count == 1
+    assert repeated.opened_count == 0
+    assert repeated.skipped_count == 1
+    assert repository.trade is first_trade
+    assert publisher.events[0][2]["reason"] == "duplicate open trade"
 
 
 def test_global_and_per_user_kill_switches_skip() -> None:

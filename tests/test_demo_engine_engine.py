@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 
@@ -186,6 +187,57 @@ def test_signal_created_opens_and_publishes_open_and_notify() -> None:
         "notify.user",
     ]
     assert "Result" not in publisher.published[1]["payload"]["text"]
+
+
+def test_signal_created_retries_until_signal_becomes_visible() -> None:
+    repository = FakeRepository()
+    real_get_signal = repository.get_signal
+    reads = 0
+
+    def delayed_get_signal(signal_id: int) -> Signal | None:
+        nonlocal reads
+        reads += 1
+        return None if reads == 1 else real_get_signal(signal_id)
+
+    repository.get_signal = delayed_get_signal  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        handle_signal_created(
+            payload={"signal_id": 7},
+            repository=repository,
+            publisher=FakePublisher(),
+            config=replace(CONFIG, signal_lookup_retry_delays_sec=(0, 0, 0)),
+        )
+    )
+
+    assert result.status == "opened"
+    assert result.opened_count == 1
+    assert reads == 2
+
+
+def test_signal_created_missing_after_retries_is_transient() -> None:
+    repository = FakeRepository()
+    reads = 0
+
+    def missing_signal(_signal_id: int) -> None:
+        nonlocal reads
+        reads += 1
+        return None
+
+    repository.get_signal = missing_signal  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        handle_signal_created(
+            payload={"signal_id": 7},
+            repository=repository,
+            publisher=FakePublisher(),
+            config=replace(CONFIG, signal_lookup_retry_delays_sec=(0, 0, 0)),
+        )
+    )
+
+    assert result.status == "retry"
+    assert result.ignored_reason == "signal_not_found"
+    assert reads == 4
 
 
 def test_signal_created_with_no_accounts_publishes_nothing() -> None:

@@ -89,6 +89,9 @@ class RetryConfig(BaseModel):
     base_delay_sec: Decimal = Decimal("0.5")
     max_delay_sec: Decimal = Decimal("8")
     jitter_pct: Decimal = Decimal("0.10")
+    signal_lookup_delays_sec: list[float] = Field(
+        default_factory=lambda: [0.05, 0.15, 0.4]
+    )
 
 
 class RateLimitConfig(BaseModel):
