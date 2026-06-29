@@ -18,20 +18,33 @@ from shared.bus import event_to_json, make_event
 class FakeRedisClient:
     def __init__(self, responses: list[Any]) -> None:
         self.responses = responses
-        self.stream_ids: list[dict[str, str]] = []
+        self.group_create_calls: list[dict[str, Any]] = []
+        self.read_group_calls: list[dict[str, Any]] = []
+        self.acked: list[tuple[str, str, str]] = []
+        self.pending: dict[str, dict[str, str]] = {}
 
-    async def xread(
-        self,
-        streams: dict[str, str],
-        *,
-        count: int,
-        block: int,
-    ) -> Any:
-        self.stream_ids.append(streams)
+    async def xgroup_create(self, **kwargs: Any) -> bool:
+        self.group_create_calls.append(kwargs)
+        return True
+
+    async def xreadgroup(self, **kwargs: Any) -> Any:
+        self.read_group_calls.append(kwargs)
+        stream_id = kwargs["streams"][demo_main.SIGNALS_STREAM]
+        if stream_id == "0":
+            if not self.pending:
+                return []
+            return [(demo_main.SIGNALS_STREAM, list(self.pending.items()))]
         response = self.responses.pop(0)
         if isinstance(response, BaseException):
             raise response
+        for _stream, messages in response:
+            self.pending.update(dict(messages))
         return response
+
+    async def xack(self, stream: str, group: str, message_id: str) -> int:
+        self.acked.append((stream, group, message_id))
+        self.pending.pop(message_id, None)
+        return 1
 
 
 @contextmanager
@@ -83,10 +96,16 @@ def test_redis_timeout_continues_and_later_signal_is_handled(
             )
 
     assert handled_payloads == [{"signal_id": 7}]
-    assert redis_client.stream_ids == [
-        {demo_main.SIGNALS_STREAM: "$"},
-        {demo_main.SIGNALS_STREAM: "$"},
-        {demo_main.SIGNALS_STREAM: "1-0"},
+    assert [
+        call["streams"][demo_main.SIGNALS_STREAM]
+        for call in redis_client.read_group_calls
+    ] == ["0", ">", "0", ">", "0", ">"]
+    assert redis_client.acked == [
+        (
+            demo_main.SIGNALS_STREAM,
+            demo_main.SIGNALS_GROUP_NAME,
+            "1-0",
+        )
     ]
     assert "reason=redis_read_timeout" in caplog.text
 
@@ -136,6 +155,99 @@ def test_consume_signals_logs_ignored_status_and_reason(
     assert "status=ignored" in message
     assert "opened_count=0" in message
     assert "ignored_reason=demo_open_plan_rejected" in message
+    assert redis_client.acked == [
+        (
+            demo_main.SIGNALS_STREAM,
+            demo_main.SIGNALS_GROUP_NAME,
+            "1-0",
+        )
+    ]
+
+
+def test_transient_signal_miss_is_reprocessed_then_acked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_event = event_to_json(make_event("signal.created", {"signal_id": 9}))
+    redis_client = FakeRedisClient(
+        [
+            [("signals", [("1-0", {"event": raw_event})])],
+            asyncio.CancelledError(),
+        ]
+    )
+    calls = 0
+
+    async def retry_then_open(**_kwargs: Any) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(
+                status="retry",
+                opened_count=0,
+                ignored_reason="signal_not_found",
+            )
+        return SimpleNamespace(status="opened", opened_count=1, ignored_reason=None)
+
+    monkeypatch.setattr(demo_main, "session_scope", fake_session_scope)
+    monkeypatch.setattr(demo_main, "handle_signal_created", retry_then_open)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            demo_main._consume_signals(
+                redis_client=redis_client,
+                session_factory=object(),
+                publisher=object(),  # type: ignore[arg-type]
+                config=object(),
+            )
+        )
+
+    assert calls == 2
+    assert redis_client.acked == [
+        (
+            demo_main.SIGNALS_STREAM,
+            demo_main.SIGNALS_GROUP_NAME,
+            "1-0",
+        )
+    ]
+
+
+def test_persistent_signal_miss_is_warned_and_left_unacked(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    raw_event = event_to_json(make_event("signal.created", {"signal_id": 10}))
+    redis_client = FakeRedisClient(
+        [[("signals", [("1-0", {"event": raw_event})])]]
+    )
+    calls = 0
+
+    async def always_retry(**_kwargs: Any) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise asyncio.CancelledError
+        return SimpleNamespace(
+            status="retry",
+            opened_count=0,
+            ignored_reason="signal_not_found",
+        )
+
+    monkeypatch.setattr(demo_main, "session_scope", fake_session_scope)
+    monkeypatch.setattr(demo_main, "handle_signal_created", always_retry)
+
+    with caplog.at_level(logging.WARNING, logger=demo_main.__name__):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(
+                demo_main._consume_signals(
+                    redis_client=redis_client,
+                    session_factory=object(),
+                    publisher=object(),  # type: ignore[arg-type]
+                    config=object(),
+                )
+            )
+
+    assert calls == 2
+    assert redis_client.acked == []
+    assert "reason=signal_not_found acknowledged=false" in caplog.text
 
 
 def test_track_prices_logs_status_and_ignored_reason(

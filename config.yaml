@@ -70,6 +70,7 @@ retry:
   base_delay_sec: 0.5
   max_delay_sec: 8
   jitter_pct: 0.10
+  signal_lookup_delays_sec: [0.05, 0.15, 0.4]
 
 rate_limit:
   telegram_messages_per_second: 20

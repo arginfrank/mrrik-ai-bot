@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
+
+import pytest
 
 from services.signal_ingestor.events import sanitizer_notes_from_result
 from services.signal_ingestor.processor import process_source_message
@@ -36,9 +39,12 @@ class FakeRepository:
     def __init__(self) -> None:
         self.accepted: list[dict[str, Any]] = []
         self.rejected: list[dict[str, Any]] = []
+        self.call_order: list[str] = []
+        self.committed = False
         self._next_id = 100
 
     def create_accepted_signal(self, **kwargs: Any) -> Signal:
+        self.call_order.append("persist")
         self.accepted.append(kwargs)
         parsed = kwargs["parsed"]
         sanitized = kwargs["sanitized"]
@@ -60,6 +66,7 @@ class FakeRepository:
         return signal
 
     def create_rejected_signal(self, **kwargs: Any) -> Signal:
+        self.call_order.append("persist")
         self.rejected.append(kwargs)
         parsed = kwargs["parsed"]
         rejection = kwargs["rejection"]
@@ -80,12 +87,20 @@ class FakeRepository:
         self._next_id += 1
         return signal
 
+    def commit(self) -> None:
+        self.call_order.append("commit")
+        self.committed = True
+
 
 class FakePublisher:
-    def __init__(self) -> None:
+    def __init__(self, repository: FakeRepository) -> None:
+        self.repository = repository
         self.published: list[dict[str, Any]] = []
 
     async def publish(self, **kwargs: Any) -> object:
+        if kwargs["payload"].get("signal_id") is not None:
+            assert self.repository.committed
+        self.repository.call_order.append("publish")
         self.published.append(kwargs)
         return object()
 
@@ -96,7 +111,7 @@ def process(
     valid_symbols: set[str] | None = None,
 ) -> tuple[Any, FakeRepository, FakePublisher]:
     repository = FakeRepository()
-    publisher = FakePublisher()
+    publisher = FakePublisher(repository)
     result = asyncio.run(
         process_source_message(
             text=text,
@@ -115,6 +130,7 @@ def test_hbar_message_persists_and_publishes_created_event() -> None:
     assert result.status == "created"
     assert result.event_type == "signal.created"
     assert len(repository.accepted) == 1
+    assert repository.call_order == ["persist", "commit", "publish"]
     assert publisher.published == [
         {
             "stream": "signals",
@@ -145,6 +161,7 @@ def test_wrong_side_stop_loss_persists_and_publishes_rejection() -> None:
     assert result.status == "rejected"
     assert result.reason == "wrong_side_stop_loss"
     assert len(repository.rejected) == 1
+    assert repository.call_order == ["persist", "commit", "publish"]
     assert publisher.published[0]["event_type"] == "signal.rejected"
     assert publisher.published[0]["payload"] == {
         "source_msg_id": 456,
@@ -152,6 +169,35 @@ def test_wrong_side_stop_loss_persists_and_publishes_rejection() -> None:
         "signal_id": 100,
         "symbol": "HBARUSDT",
     }
+
+
+def test_publish_failure_happens_after_commit_and_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = FakeRepository()
+
+    class FailingPublisher(FakePublisher):
+        async def publish(self, **kwargs: Any) -> object:
+            assert self.repository.committed
+            self.repository.call_order.append("publish")
+            raise RuntimeError("redis unavailable")
+
+    with caplog.at_level(
+        logging.ERROR,
+        logger="services.signal_ingestor.processor",
+    ):
+        with pytest.raises(RuntimeError, match="redis unavailable"):
+            asyncio.run(
+                process_source_message(
+                    text=HBAR_SIGNAL,
+                    source_msg_id=456,
+                    repository=repository,
+                    publisher=FailingPublisher(repository),
+                )
+            )
+
+    assert repository.call_order == ["persist", "commit", "publish"]
+    assert "status=publish_failed persisted=true" in caplog.text
 
 
 def test_parser_error_publishes_rejection_without_persisting() -> None:

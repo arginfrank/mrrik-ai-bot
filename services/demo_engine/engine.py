@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
@@ -46,6 +47,7 @@ class DemoEngineConfig:
     include_commission: bool
     include_funding: bool
     include_slippage: bool
+    signal_lookup_retry_delays_sec: tuple[float, ...] = (0.05, 0.15, 0.4)
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,7 @@ def config_from_app_config(app_config: object) -> DemoEngineConfig:
     risk = getattr(file_config, "risk")
     execution = getattr(file_config, "execution")
     demo = getattr(file_config, "demo")
+    retry = getattr(file_config, "retry", None)
     return DemoEngineConfig(
         start_balance_usdt=Decimal(demo.start_balance_usdt),
         fixed_margin_usdt=Decimal(risk.fixed_margin_usdt),
@@ -73,6 +76,14 @@ def config_from_app_config(app_config: object) -> DemoEngineConfig:
         include_commission=bool(demo.include_commission),
         include_funding=bool(demo.include_funding),
         include_slippage=bool(demo.include_slippage),
+        signal_lookup_retry_delays_sec=tuple(
+            float(delay)
+            for delay in getattr(
+                retry,
+                "signal_lookup_delays_sec",
+                (0.05, 0.15, 0.4),
+            )
+        ),
     )
 
 
@@ -88,9 +99,13 @@ async def handle_signal_created(
     if signal_id is None:
         return DemoHandleResult(status="ignored", ignored_reason="missing_signal_id")
 
-    signal = repository.get_signal(signal_id)  # type: ignore[attr-defined]
+    signal = await _get_signal_with_retry(
+        repository=repository,
+        signal_id=signal_id,
+        delays=config.signal_lookup_retry_delays_sec,
+    )
     if signal is None:
-        return DemoHandleResult(status="ignored", ignored_reason="signal_not_found")
+        return DemoHandleResult(status="retry", ignored_reason="signal_not_found")
     if signal.status != "accepted":
         return DemoHandleResult(status="ignored", ignored_reason="signal_not_accepted")
 
@@ -189,6 +204,18 @@ async def handle_signal_created(
     else:
         reason = "no_eligible_accounts"
     return DemoHandleResult(status="ignored", ignored_reason=reason)
+
+
+async def _get_signal_with_retry(
+    *, repository: object, signal_id: int, delays: tuple[float, ...]
+) -> Any | None:
+    signal = repository.get_signal(signal_id)  # type: ignore[attr-defined]
+    for delay in delays:
+        if signal is not None:
+            break
+        await asyncio.sleep(delay)
+        signal = repository.get_signal(signal_id)  # type: ignore[attr-defined]
+    return signal
 
 
 async def handle_mark_price(

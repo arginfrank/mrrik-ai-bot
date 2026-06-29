@@ -21,6 +21,7 @@ def test_load_default_config() -> None:
     assert settings.file.admin_panel.session_ttl_sec == 43_200
     assert settings.file.admin_panel.telegram_auth_max_age_sec == 86_400
     assert settings.file.admin_panel.require_ip_allowlist is False
+    assert settings.file.retry.signal_lookup_delays_sec == [0.05, 0.15, 0.4]
 
 
 def test_missing_config_raises() -> None:

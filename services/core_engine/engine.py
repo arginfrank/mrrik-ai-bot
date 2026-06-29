@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 import inspect
@@ -48,6 +49,7 @@ class CoreEngineConfig:
     entry_max_deviation_pct: Decimal
     maintenance_margin_rate: Decimal
     leverage_cap: int | None = None
+    signal_lookup_retry_delays_sec: tuple[float, ...] = (0.05, 0.15, 0.4)
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ def config_from_app_config(app_config: object) -> CoreEngineConfig:
     file_config = getattr(app_config, "file")
     risk = getattr(file_config, "risk")
     execution = getattr(file_config, "execution")
+    retry = getattr(file_config, "retry", None)
     return CoreEngineConfig(
         fixed_margin_usdt=Decimal(risk.fixed_margin_usdt),
         risk_model=int(risk.default_model),
@@ -75,6 +78,14 @@ def config_from_app_config(app_config: object) -> CoreEngineConfig:
         entry_fill_timeout_sec=int(execution.entry_fill_timeout_sec),
         entry_max_deviation_pct=Decimal(execution.entry_max_deviation_pct),
         maintenance_margin_rate=Decimal(execution.maintenance_margin_rate_default),
+        signal_lookup_retry_delays_sec=tuple(
+            float(delay)
+            for delay in getattr(
+                retry,
+                "signal_lookup_delays_sec",
+                (0.05, 0.15, 0.4),
+            )
+        ),
     )
 
 
@@ -93,11 +104,15 @@ async def handle_signal_created(
     signal_id = _positive_int(payload.get("signal_id"))
     if signal_id is None:
         return HandleSignalResult(status="ignored", ignored_reason="missing signal_id")
+    signal = await _get_signal_with_retry(
+        repository=repository,
+        signal_id=signal_id,
+        delays=config.signal_lookup_retry_delays_sec,
+    )
+    if signal is None:
+        return HandleSignalResult(status="retry", ignored_reason="signal_not_found")
     if not repository.mark_event_processed(_event_uuid(event_id)):  # type: ignore[attr-defined]
         return HandleSignalResult(status="ignored", ignored_reason="duplicate event")
-    signal = repository.get_signal(signal_id)  # type: ignore[attr-defined]
-    if signal is None:
-        return HandleSignalResult(status="ignored", ignored_reason="signal not found")
     if signal.status != "accepted":
         return HandleSignalResult(status="ignored", ignored_reason="signal not accepted")
 
@@ -326,6 +341,18 @@ async def handle_signal_created(
         skipped_count=skipped,
         error_count=errors,
     )
+
+
+async def _get_signal_with_retry(
+    *, repository: object, signal_id: int, delays: tuple[float, ...]
+) -> Any | None:
+    signal = repository.get_signal(signal_id)  # type: ignore[attr-defined]
+    for delay in delays:
+        if signal is not None:
+            break
+        await asyncio.sleep(delay)
+        signal = repository.get_signal(signal_id)  # type: ignore[attr-defined]
+    return signal
 
 
 async def _precheck_reason(
