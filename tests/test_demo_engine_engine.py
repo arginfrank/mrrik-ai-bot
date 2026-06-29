@@ -4,6 +4,9 @@ import asyncio
 from decimal import Decimal
 from typing import Any
 
+import pytest
+
+from services.demo_engine import engine as demo_engine
 from services.demo_engine.engine import (
     DemoEngineConfig,
     handle_mark_price,
@@ -217,6 +220,83 @@ def test_duplicate_open_trade_is_skipped() -> None:
 
     assert result.ignored_reason == "duplicate_open_trade"
     assert publisher.published == []
+
+
+def test_signal_created_reports_when_all_open_plans_are_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeRepository(account_count=2)
+    publisher = FakePublisher()
+
+    def reject_plan(**_kwargs: Any) -> None:
+        raise ValueError("unsafe detail must not escape")
+
+    monkeypatch.setattr(demo_engine, "build_demo_open_plan", reject_plan)
+
+    result = asyncio.run(
+        handle_signal_created(
+            payload={"signal_id": 7},
+            repository=repository,
+            publisher=publisher,
+            config=CONFIG,
+        )
+    )
+
+    assert result.status == "ignored"
+    assert result.opened_count == 0
+    assert result.ignored_reason == "demo_open_plan_rejected"
+    assert publisher.published == []
+
+
+def test_one_rejected_account_does_not_block_another_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeRepository(account_count=2)
+    publisher = FakePublisher()
+    real_build_demo_open_plan = demo_engine.build_demo_open_plan
+    call_count = 0
+
+    def reject_first_plan(**kwargs: Any):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ValueError("first account rejected")
+        return real_build_demo_open_plan(**kwargs)
+
+    monkeypatch.setattr(demo_engine, "build_demo_open_plan", reject_first_plan)
+
+    result = asyncio.run(
+        handle_signal_created(
+            payload={"signal_id": 7},
+            repository=repository,
+            publisher=publisher,
+            config=CONFIG,
+        )
+    )
+
+    assert result.status == "opened"
+    assert result.opened_count == 1
+    assert result.ignored_reason is None
+    assert len(repository.trades) == 1
+
+
+def test_valid_model3_signal_with_zero_targets_opens_without_legs() -> None:
+    repository = FakeRepository(risk_model=3)
+    repository.signal.targets_clean = []
+    publisher = FakePublisher()
+
+    result = asyncio.run(
+        handle_signal_created(
+            payload={"signal_id": 7},
+            repository=repository,
+            publisher=publisher,
+            config=CONFIG,
+        )
+    )
+
+    assert result.status == "opened"
+    assert result.opened_count == 1
+    assert repository.trades[0].legs == []
 
 
 def test_tp1_fill_is_silent_mid_trade() -> None:

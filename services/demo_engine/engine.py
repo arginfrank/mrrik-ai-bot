@@ -106,6 +106,7 @@ async def handle_signal_created(
 
     opened_count = 0
     duplicate_count = 0
+    plan_rejected_count = 0
     for account in accounts:
         if repository.has_open_demo_trade(  # type: ignore[attr-defined]
             user_id=account.user_id,
@@ -143,6 +144,7 @@ async def handle_signal_created(
                 include_slippage=config.include_slippage,
             )
         except ValueError:
+            plan_rejected_count += 1
             continue
 
         original_leverage = signal.leverage
@@ -180,7 +182,12 @@ async def handle_signal_created(
 
     if opened_count:
         return DemoHandleResult(status="opened", opened_count=opened_count)
-    reason = "duplicate_open_trade" if duplicate_count else "no_eligible_accounts"
+    if duplicate_count == len(accounts):
+        reason = "duplicate_open_trade"
+    elif plan_rejected_count:
+        reason = "demo_open_plan_rejected"
+    else:
+        reason = "no_eligible_accounts"
     return DemoHandleResult(status="ignored", ignored_reason=reason)
 
 

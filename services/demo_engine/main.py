@@ -117,9 +117,12 @@ async def _consume_signals(
                     )
                     continue
                 LOGGER.info(
-                    "event_type=signal.created signal_id=%s opened_count=%s",
+                    "event_type=signal.created signal_id=%s status=%s "
+                    "opened_count=%s ignored_reason=%s",
                     event.payload.get("signal_id"),
+                    result.status,
                     result.opened_count,
+                    result.ignored_reason or "-",
                 )
 
 
@@ -155,9 +158,12 @@ async def _track_prices(
                     )
                     continue
                 LOGGER.info(
-                    "event_type=mark_price symbol=%s closed_count=%s",
+                    "event_type=mark_price symbol=%s status=%s "
+                    "closed_count=%s ignored_reason=%s",
                     mark_price.symbol,
+                    result.status,
                     result.closed_count,
+                    result.ignored_reason or "-",
                 )
                 if loop.time() >= next_poll:
                     if tuple(_open_symbols(session_factory)) != subscribed:
