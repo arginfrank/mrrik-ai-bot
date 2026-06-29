@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin login · MRRIK AI bot</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/admin.css') }}">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="brand login-brand"><span class="brand-mark">M</span><span>MRRIK <small>ADMIN</small></span></div>
+    <p class="eyebrow">Secure access</p>
+    <h1>Sign in to the control room</h1>
+    {% if error %}<p class="alert error">{{ error }}</p>{% endif %}
+    {% if auth_mode == 'bootstrap_token' %}
+    <form method="post" action="/login" class="stack-form">
+      <label for="token">Bootstrap token</label>
+      <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
+      <button class="button primary" type="submit">Sign in</button>
+    </form>
+    <p class="muted">Development/VPN authentication. The token is never displayed or logged.</p>
+    {% else %}
+    <p>Complete sign-in through the configured Telegram Login Widget. Only configured admin Telegram accounts are accepted.</p>
+    <p class="muted">The verified Telegram callback posts its signed fields to this endpoint.</p>
+    {% endif %}
+  </main>
+</body>
+</html>

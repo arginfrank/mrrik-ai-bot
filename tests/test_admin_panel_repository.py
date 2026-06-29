@@ -13,7 +13,19 @@ from services.admin_panel.repository import (
     make_engine_from_config,
     make_session_factory,
 )
-from shared.models import AuditLog, Payment, Plan, Signal, Subscription, User
+from shared.models import (
+    AuditLog,
+    DemoAccount,
+    DemoTrade,
+    ExchangeCredential,
+    Payment,
+    Plan,
+    Signal,
+    Subscription,
+    Trade,
+    User,
+    UserSetting,
+)
 
 
 pytestmark = pytest.mark.skipif(
@@ -61,6 +73,51 @@ def test_admin_panel_repository_payment_and_anomaly_lifecycle() -> None:
         )
         session.add_all(
             (pending_approval, approval_payment, pending_rejection, rejection_payment)
+        )
+        session.add_all(
+            (
+                ExchangeCredential(
+                    user=user,
+                    api_key_enc=b"encrypted-key",
+                    api_secret_enc=b"encrypted-secret",
+                    scope_verified=True,
+                    is_valid=True,
+                ),
+                UserSetting(user=user, risk_model=2),
+                DemoAccount(user=user, balance_usdt=Decimal("1004.20")),
+                DemoTrade(
+                    user=user,
+                    symbol="ETHUSDT",
+                    side="LONG",
+                    leverage=10,
+                    margin_usdt=Decimal("10"),
+                    notional_usdt=Decimal("100"),
+                    qty=Decimal("0.05"),
+                    status="closed",
+                    realized_pnl_usdt=Decimal("4.20"),
+                    realized_roi_pct=Decimal("42"),
+                    touched_tps=[1],
+                    closed_reason="all_tp",
+                    opened_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+                    closed_at=datetime(2026, 1, 1, 11, tzinfo=UTC),
+                ),
+                Trade(
+                    user=user,
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    leverage=10,
+                    margin_usdt=Decimal("10"),
+                    notional_usdt=Decimal("100"),
+                    qty=Decimal("0.001"),
+                    status="closed",
+                    realized_pnl_usdt=Decimal("2.50"),
+                    realized_roi_pct=Decimal("25"),
+                    touched_tps=[1],
+                    closed_reason="all_tp",
+                    opened_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+                    closed_at=datetime(2026, 1, 1, 12, tzinfo=UTC),
+                ),
+            )
         )
         session.flush()
 
@@ -115,6 +172,30 @@ def test_admin_panel_repository_payment_and_anomaly_lifecycle() -> None:
         assert rejected_signal in anomalies
         assert alerted_signal in anomalies
         assert clean_signal not in anomalies
+
+        all_payments = repository.list_payments()
+        assert approval_payment in all_payments
+        assert rejection_payment in all_payments
+
+        summaries = repository.list_user_summaries()
+        summary = next(item for item in summaries if item.user.id == user.id)
+        assert summary.credential_valid is True
+        assert summary.risk_model == 2
+        assert summary.demo_balance_usdt == Decimal("1004.20")
+        assert summary.demo_wins == 1
+
+        closed_trades = repository.list_trades(history=True, user_id=user.id)
+        assert len(closed_trades) == 1
+        assert closed_trades[0].symbol == "BTCUSDT"
+
+        repository.set_user_blocked(user=user, blocked=True)
+        assert user.is_blocked is True
+
+        metrics = repository.get_overview_metrics(
+            now_utc=datetime(2026, 1, 1, 23, tzinfo=UTC)
+        )
+        assert metrics.pending_payments == 0
+        assert metrics.realized_pnl_today == Decimal("2.50")
 
         audit_actions = set(session.scalars(select(AuditLog.action)))
         assert {"payment.approve", "payment.reject"} <= audit_actions

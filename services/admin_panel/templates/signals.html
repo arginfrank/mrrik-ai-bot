@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Signals & anomalies{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Sanitizer review</p><h1>Signals &amp; anomalies</h1></div></div>
+<section class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>Signal</th><th>Raw signal</th><th>Cleaned signal</th><th>Dropped / corrected / rejected</th><th>Time</th></tr></thead><tbody>
+{% for signal in signals %}<tr><td>#{{ signal.id }} · {{ signal.side }} {{ signal.symbol }}<small class="subline">{{ signal.leverage }}× · {{ signal.status }}</small></td><td><span class="mono">Entry {{ signal.entry|price }}<br>SL {{ signal.stop_loss|price }}<br>Targets {{ signal.targets_raw|join(', ') }}</span></td><td><span class="mono">Targets {{ signal.targets_clean|join(', ') }}</span></td><td>{% if signal.reject_reason %}<span class="badge danger-badge">Rejected</span> {{ signal.reject_reason }}{% endif %}<pre>{{ signal.sanitizer_notes or {} }}</pre></td><td>{{ signal.created_at|utc }}</td></tr>{% else %}<tr><td colspan="5" class="empty">No signal anomalies.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

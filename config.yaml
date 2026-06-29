@@ -58,7 +58,12 @@ payment_precheck:
     explorer_base_url: https://polygonscan.com/tx
 
 admin_panel:
+  bind_host: "127.0.0.1"
+  auth_mode: "telegram_login"
+  session_ttl_sec: 43200
+  telegram_auth_max_age_sec: 86400
   ip_allowlist: ["127.0.0.1", "::1"]
+  require_ip_allowlist: false
 
 retry:
   max_attempts: 3

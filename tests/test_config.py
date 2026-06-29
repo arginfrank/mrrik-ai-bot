@@ -16,6 +16,11 @@ def test_load_default_config() -> None:
     assert settings.file.telegram_bot.notify_consumer_name == "telegram-bot-1"
     assert settings.file.telegram_bot.notify_read_count == 100
     assert settings.file.telegram_bot.notify_block_ms == 5000
+    assert settings.file.admin_panel.bind_host == "127.0.0.1"
+    assert settings.file.admin_panel.auth_mode == "telegram_login"
+    assert settings.file.admin_panel.session_ttl_sec == 43_200
+    assert settings.file.admin_panel.telegram_auth_max_age_sec == 86_400
+    assert settings.file.admin_panel.require_ip_allowlist is False
 
 
 def test_missing_config_raises() -> None:
