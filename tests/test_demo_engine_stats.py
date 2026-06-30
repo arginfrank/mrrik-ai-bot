@@ -23,6 +23,22 @@ def test_one_open_trade_counts_only_as_open() -> None:
     assert stats["win_rate_pct"] == Decimal("0")
 
 
+def test_empty_demo_stats_format_without_dividing_by_zero() -> None:
+    stats = compute_demo_stats(
+        {
+            "start_balance_usdt": Decimal("1000"),
+            "current_balance_usdt": Decimal("1000"),
+            "fixed_margin_usdt": Decimal("10"),
+            "trades": [],
+        }
+    )
+
+    assert stats["signals_traded"] == 0
+    assert stats["closed_count"] == 0
+    assert stats["win_rate_pct"] == Decimal("0")
+    assert "Win rate: 0.0%" in format_demo_stats(stats)
+
+
 def test_stats_use_closed_trades_only_for_balance_and_win_rate() -> None:
     raw = {
         "start_balance_usdt": Decimal("1000"),

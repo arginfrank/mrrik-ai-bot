@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+import logging
 from typing import Any, Protocol
 
 from aiogram import F, Router
@@ -12,6 +13,9 @@ from aiogram.filters import Command, CommandStart
 
 from services.demo_engine.stats import compute_demo_stats, format_demo_stats
 from services.telegram_bot.constants import (
+    CALLBACK_DEMO_RESET,
+    CALLBACK_DEMO_RESET_CANCEL,
+    CALLBACK_DEMO_RESET_CONFIRM,
     CALLBACK_LANGUAGE_PREFIX,
     CALLBACK_MAIN_PREFIX,
     CALLBACK_NETWORK_PREFIX,
@@ -36,6 +40,7 @@ from services.telegram_bot.events import (
 from services.telegram_bot.i18n import normalize_language, t
 from services.telegram_bot.keyboards import (
     back_to_main_keyboard,
+    demo_reset_confirmation_keyboard,
     demo_stats_keyboard,
     language_keyboard,
     main_menu_keyboard,
@@ -49,6 +54,9 @@ from services.telegram_bot.states import (
     SettingsStates,
     SubscribeStates,
 )
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class EventPublisher(Protocol):
@@ -150,6 +158,19 @@ def create_router(
             config=config,
         )
 
+    async def demo_reset(callback: Any) -> None:
+        await handle_demo_reset(callback=callback)
+
+    async def demo_reset_confirm(callback: Any) -> None:
+        await handle_demo_reset_confirm(
+            callback=callback,
+            repository_factory=repository_factory,
+            config=config,
+        )
+
+    async def demo_reset_cancel(callback: Any) -> None:
+        await handle_demo_reset_cancel(callback=callback)
+
     async def subscription(event: Any) -> None:
         await handle_my_subscription(
             event=event,
@@ -212,6 +233,18 @@ def create_router(
     router.callback_query.register(
         demo,
         F.data == f"{CALLBACK_MAIN_PREFIX}demo",
+    )
+    router.callback_query.register(
+        demo_reset,
+        F.data == CALLBACK_DEMO_RESET,
+    )
+    router.callback_query.register(
+        demo_reset_confirm,
+        F.data == CALLBACK_DEMO_RESET_CONFIRM,
+    )
+    router.callback_query.register(
+        demo_reset_cancel,
+        F.data == CALLBACK_DEMO_RESET_CANCEL,
     )
     router.callback_query.register(
         subscription,
@@ -432,19 +465,7 @@ async def handle_demo(
             telegram_id=telegram_id,
             username=username,
         )
-        repository.get_or_create_demo_account(
-            user=user,
-            start_balance_usdt=config.start_balance_usdt,
-        )
-        get_stats = getattr(repository, "get_demo_stats", None)
-        if callable(get_stats):
-            try:
-                stats_text = format_demo_stats(compute_demo_stats(get_stats(user.id)))
-            except (KeyError, TypeError, ValueError):
-                stats_text = t("demo_stats_unavailable", user.language)
-        else:
-            stats_text = t("demo_stats_unavailable", user.language)
-        text = f"{t('demo_enabled', user.language)}\n\n{stats_text}"
+        text = _demo_card_text(repository=repository, user=user, config=config)
     await _respond(
         event,
         text,
@@ -452,6 +473,47 @@ async def handle_demo(
         skip_unchanged=True,
     )
     await _ack_if_callback(event)
+
+
+async def handle_demo_reset(*, callback: Any) -> None:
+    await _edit_callback(
+        callback,
+        t("demo_reset_confirmation"),
+        reply_markup=demo_reset_confirmation_keyboard(),
+    )
+    await _ack(callback)
+
+
+async def handle_demo_reset_cancel(*, callback: Any) -> None:
+    await _edit_callback(
+        callback,
+        t("demo_reset_cancelled"),
+        reply_markup=None,
+    )
+    await _ack(callback)
+
+
+async def handle_demo_reset_confirm(
+    *,
+    callback: Any,
+    repository_factory: Any,
+    config: TelegramBotConfig,
+) -> None:
+    telegram_id, username = _identity(callback)
+    with _repository_context(repository_factory) as repository:
+        user = repository.get_or_create_user(
+            telegram_id=telegram_id,
+            username=username,
+        )
+        deleted_count = repository.reset_demo_for_user(user.id)
+        text = _demo_card_text(repository=repository, user=user, config=config)
+        LOGGER.info(
+            "Reset demo for user_id=%s; deleted %s trade(s)",
+            user.id,
+            deleted_count,
+        )
+    await _edit_callback(callback, text, reply_markup=demo_stats_keyboard())
+    await _ack(callback)
 
 
 async def handle_my_subscription(*, event: Any, repository_factory: Any) -> None:
@@ -593,6 +655,27 @@ async def handle_fixed_margin(
 async def handle_help(*, event: Any) -> None:
     await _respond(event, t("help"), reply_markup=back_to_main_keyboard())
     await _ack_if_callback(event)
+
+
+def _demo_card_text(
+    *,
+    repository: Any,
+    user: Any,
+    config: TelegramBotConfig,
+) -> str:
+    repository.get_or_create_demo_account(
+        user=user,
+        start_balance_usdt=config.start_balance_usdt,
+    )
+    get_stats = getattr(repository, "get_demo_stats", None)
+    if callable(get_stats):
+        try:
+            stats_text = format_demo_stats(compute_demo_stats(get_stats(user.id)))
+        except (KeyError, TypeError, ValueError):
+            stats_text = t("demo_stats_unavailable", user.language)
+    else:
+        stats_text = t("demo_stats_unavailable", user.language)
+    return f"{t('demo_enabled', user.language)}\n\n{stats_text}"
 
 
 @contextmanager

@@ -51,7 +51,8 @@ def build_demo_closed_payload(
 
 def format_demo_open_message(demo_trade: DemoTrade) -> str:
     """Return the open notification text. No result numbers."""
-    return f"Demo: {demo_trade.side} {demo_trade.symbol} opened."
+    emoji = "🟢" if demo_trade.side == "LONG" else "🔴"
+    return f"{emoji} Demo: {demo_trade.side} {demo_trade.symbol} opened."
 
 
 def format_demo_close_message(demo_trade: DemoTrade) -> str:
@@ -65,7 +66,8 @@ def format_demo_close_message(demo_trade: DemoTrade) -> str:
     roi = _format_signed(demo_trade.realized_roi_pct, places=1)
     pnl = _format_signed(demo_trade.realized_pnl_usdt, places=2)
     return (
-        f"{demo_trade.side} {demo_trade.symbol} — {reason} "
+        f"{_close_status_emoji(demo_trade)} {demo_trade.side} "
+        f"{demo_trade.symbol} — {reason} "
         f"Result: {roi}% ({pnl} USDT)."
     )
 
@@ -97,6 +99,18 @@ def _format_close_reason(demo_trade: DemoTrade) -> str:
     if demo_trade.closed_reason == "model3_exit":
         return "Model 3 exit."
     raise ValueError(f"unsupported demo close reason: {demo_trade.closed_reason!r}")
+
+
+def _close_status_emoji(demo_trade: DemoTrade) -> str:
+    if demo_trade.closed_reason == "liquidation":
+        return "⚠️"
+    if demo_trade.realized_roi_pct is None:
+        raise ValueError("closed demo trade is missing its realized result")
+    if demo_trade.realized_roi_pct > 0:
+        return "✅"
+    if demo_trade.realized_roi_pct == 0:
+        return "➖"
+    return "🔻"
 
 
 def _format_signed(value: Decimal, *, places: int) -> str:

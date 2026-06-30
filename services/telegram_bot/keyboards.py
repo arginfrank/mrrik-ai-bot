@@ -11,6 +11,9 @@ except ImportError:  # pragma: no cover - compatibility with older aiogram v3
     CopyTextButton = None  # type: ignore[assignment,misc]
 
 from services.telegram_bot.constants import (
+    CALLBACK_DEMO_RESET,
+    CALLBACK_DEMO_RESET_CANCEL,
+    CALLBACK_DEMO_RESET_CONFIRM,
     CALLBACK_LANGUAGE_PREFIX,
     CALLBACK_MAIN_PREFIX,
     CALLBACK_NETWORK_PREFIX,
@@ -140,7 +143,30 @@ def demo_stats_keyboard() -> InlineKeyboardMarkup:
                     callback_data=f"{CALLBACK_MAIN_PREFIX}demo",
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text=t("demo_reset_button"),
+                    callback_data=CALLBACK_DEMO_RESET,
+                )
+            ],
             [_back_button()],
+        ]
+    )
+
+
+def demo_reset_confirmation_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t("demo_reset_confirm_button"),
+                    callback_data=CALLBACK_DEMO_RESET_CONFIRM,
+                ),
+                InlineKeyboardButton(
+                    text=t("demo_reset_cancel_button"),
+                    callback_data=CALLBACK_DEMO_RESET_CANCEL,
+                ),
+            ]
         ]
     )
 

@@ -25,8 +25,14 @@ def test_open_payload_and_message_have_no_result_numbers() -> None:
         "side": "LONG",
         "status": "open",
     }
-    assert format_demo_open_message(trade) == "Demo: LONG ETHUSDT opened."
+    assert format_demo_open_message(trade) == "🟢 Demo: LONG ETHUSDT opened."
     assert "Result" not in format_demo_open_message(trade)
+
+
+def test_short_open_message_starts_with_red_status_emoji() -> None:
+    assert format_demo_open_message(_trade(status="open", side="SHORT")).startswith(
+        "🔴 Demo: SHORT"
+    )
 
 
 def test_closed_payload_stringifies_decimals() -> None:
@@ -54,22 +60,40 @@ def test_closed_payload_stringifies_decimals() -> None:
 @pytest.mark.parametrize(
     ("reason", "roi", "pnl", "touched", "expected"),
     [
-        ("all_tp", "42", "4.2", [1, 2], "TP1, TP2 hit. Result: +42.0% (+4.20 USDT)."),
-        ("sl", "-1", "-0.1", [], "Stopped. Result: -1.0% (-0.10 USDT)."),
-        ("be", "5", "0.5", [1], "Break-even. Result: +5.0% (+0.50 USDT)."),
+        (
+            "all_tp",
+            "42",
+            "4.2",
+            [1, 2],
+            "✅ LONG ETHUSDT — TP1, TP2 hit. Result: +42.0% (+4.20 USDT).",
+        ),
+        (
+            "sl",
+            "-1",
+            "-0.1",
+            [],
+            "🔻 LONG ETHUSDT — Stopped. Result: -1.0% (-0.10 USDT).",
+        ),
+        (
+            "be",
+            "5",
+            "0.5",
+            [1],
+            "✅ LONG ETHUSDT — Break-even. Result: +5.0% (+0.50 USDT).",
+        ),
         (
             "liquidation",
             "-100",
             "-10",
             [],
-            "Liquidated. Result: -100.0% (-10.00 USDT).",
+            "⚠️ LONG ETHUSDT — Liquidated. Result: -100.0% (-10.00 USDT).",
         ),
         (
             "model3_exit",
             "20",
             "2",
             [],
-            "Model 3 exit. Result: +20.0% (+2.00 USDT).",
+            "✅ LONG ETHUSDT — Model 3 exit. Result: +20.0% (+2.00 USDT).",
         ),
     ],
 )
@@ -90,7 +114,20 @@ def test_close_message_formats_every_reason(
         )
     )
 
-    assert message == f"LONG ETHUSDT — {expected}"
+    assert message == expected
+
+
+def test_zero_result_close_message_starts_with_neutral_status_emoji() -> None:
+    message = format_demo_close_message(
+        _trade(
+            status="closed",
+            closed_reason="be",
+            roi=Decimal("0"),
+            pnl=Decimal("0"),
+        )
+    )
+
+    assert message.startswith("➖")
 
 
 def test_notify_user_payload_uses_telegram_id_text_and_language() -> None:
@@ -106,6 +143,7 @@ def test_notify_user_payload_uses_telegram_id_text_and_language() -> None:
 def _trade(
     *,
     status: str,
+    side: str = "LONG",
     closed_reason: str | None = None,
     roi: Decimal | None = None,
     pnl: Decimal | None = None,
@@ -116,7 +154,7 @@ def _trade(
         signal_id=3,
         user_id=2,
         symbol="ETHUSDT",
-        side="LONG",
+        side=side,
         leverage=10,
         margin_usdt=Decimal("10"),
         notional_usdt=Decimal("100"),

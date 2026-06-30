@@ -11,6 +11,9 @@ from services.telegram_bot.handlers import (
     TelegramBotConfig,
     handle_api_credentials,
     handle_demo,
+    handle_demo_reset,
+    handle_demo_reset_cancel,
+    handle_demo_reset_confirm,
     handle_language,
     handle_network,
     handle_plan,
@@ -113,6 +116,7 @@ class FakeRepository:
         self.created_users = 0
         self.demo_account_calls = 0
         self.demo_stats_calls = 0
+        self.demo_reset_user_ids: list[int] = []
         self.demo_account = SimpleNamespace(user_id=self.user.id)
         self.credentials: tuple[bytes, bytes] | None = None
         self.payment: Payment | None = None
@@ -166,6 +170,10 @@ class FakeRepository:
             "fixed_margin_usdt": Decimal("10"),
             "trades": [],
         }
+
+    def reset_demo_for_user(self, user_id: int) -> int:
+        self.demo_reset_user_ids.append(user_id)
+        return 3
 
     def store_exchange_credentials(
         self,
@@ -318,7 +326,7 @@ def test_demo_handler_displays_stats() -> None:
         for row in message.answers[0]["reply_markup"].inline_keyboard
         for button in row
     }
-    assert callbacks == {"main:demo", "main:menu"}
+    assert callbacks == {"main:demo", "demo:reset", "main:menu"}
 
 
 def test_demo_refresh_reuses_idempotent_account_and_rebuilds_stats() -> None:
@@ -368,6 +376,57 @@ def test_demo_refresh_acknowledges_unchanged_stats_without_invalid_edit() -> Non
 
     assert repository.demo_stats_calls == 2
     assert callback.message.edits == []
+    assert callback.acks == [{"text": None, "show_alert": False}]
+
+
+def test_demo_reset_requires_confirmation_before_deleting() -> None:
+    repository = FakeRepository()
+    callback = FakeCallback("demo:reset")
+
+    asyncio.run(handle_demo_reset(callback=callback))
+
+    assert repository.demo_reset_user_ids == []
+    edit = callback.message.edits[0]
+    assert edit["text"] == (
+        "⚠️ This will permanently delete all your demo trades and reset your demo "
+        "balance to the starting amount. Your settings (margin, risk model, leverage) "
+        "are kept. Continue?"
+    )
+    callbacks = {
+        button.callback_data
+        for row in edit["reply_markup"].inline_keyboard
+        for button in row
+    }
+    assert callbacks == {"demo:reset:confirm", "demo:reset:cancel"}
+
+
+def test_demo_reset_cancel_edits_message_without_deleting() -> None:
+    callback = FakeCallback("demo:reset:cancel")
+
+    asyncio.run(handle_demo_reset_cancel(callback=callback))
+
+    assert callback.message.edits == [
+        {"text": "Reset cancelled.", "reply_markup": None}
+    ]
+    assert callback.acks == [{"text": None, "show_alert": False}]
+
+
+def test_demo_reset_confirm_deletes_and_displays_zeroed_stats() -> None:
+    repository = FakeRepository()
+    callback = FakeCallback("demo:reset:confirm")
+
+    asyncio.run(
+        handle_demo_reset_confirm(
+            callback=callback,
+            repository_factory=lambda: repository,
+            config=_config(),
+        )
+    )
+
+    assert repository.demo_reset_user_ids == [repository.user.id]
+    assert callback.message.edits[0]["text"].endswith(
+        "Net profit: +0.00 USDT (+0.0%)"
+    )
     assert callback.acks == [{"text": None, "show_alert": False}]
 
 
