@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from services.telegram_bot.constants import SUPPORTED_PAYMENT_NETWORKS
@@ -14,6 +14,7 @@ from shared.config import load_config
 from shared.models import (
     DemoAccount,
     DemoTrade,
+    DemoTradeLeg,
     ExchangeCredential,
     Payment,
     Plan,
@@ -207,6 +208,20 @@ class TelegramBotRepository:
                 for row in rows
             ],
         }
+
+    def reset_demo_for_user(self, user_id: int) -> int:
+        trade_ids = select(DemoTrade.id).where(DemoTrade.user_id == user_id)
+        self._session.execute(
+            delete(DemoTradeLeg).where(DemoTradeLeg.demo_trade_id.in_(trade_ids))
+        )
+        result = self._session.execute(
+            delete(DemoTrade).where(DemoTrade.user_id == user_id)
+        )
+        account = self._session.get(DemoAccount, user_id)
+        if account is not None:
+            account.balance_usdt = account.start_balance_usdt
+        self._session.flush()
+        return int(result.rowcount or 0)
 
     def get_or_create_user_settings(self, *, user: User) -> UserSetting:
         settings = self._session.get(UserSetting, user.id)

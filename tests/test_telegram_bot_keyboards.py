@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from services.telegram_bot.keyboards import (
+    demo_reset_confirmation_keyboard,
     demo_stats_keyboard,
     language_keyboard,
     main_menu_keyboard,
@@ -36,7 +37,16 @@ def test_demo_stats_keyboard_refreshes_and_returns_to_main_menu() -> None:
     buttons = _buttons(demo_stats_keyboard())
     assert [(button.text, button.callback_data) for button in buttons] == [
         ("Refresh demo stats", "main:demo"),
+        ("🔄 Reset demo", "demo:reset"),
         ("Back to main menu", "main:menu"),
+    ]
+
+
+def test_demo_reset_confirmation_keyboard_has_confirm_and_cancel() -> None:
+    buttons = _buttons(demo_reset_confirmation_keyboard())
+    assert [(button.text, button.callback_data) for button in buttons] == [
+        ("✅ Yes, reset", "demo:reset:confirm"),
+        ("❌ Cancel", "demo:reset:cancel"),
     ]
 
 

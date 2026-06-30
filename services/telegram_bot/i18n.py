@@ -55,6 +55,15 @@ _TEXTS: dict[str, dict[str, str]] = {
             "future signals."
         ),
         "demo_refresh_button": "Refresh demo stats",
+        "demo_reset_button": "🔄 Reset demo",
+        "demo_reset_confirmation": (
+            "⚠️ This will permanently delete all your demo trades and reset your demo "
+            "balance to the starting amount. Your settings (margin, risk model, leverage) "
+            "are kept. Continue?"
+        ),
+        "demo_reset_confirm_button": "✅ Yes, reset",
+        "demo_reset_cancel_button": "❌ Cancel",
+        "demo_reset_cancelled": "Reset cancelled.",
         "demo_stats_unavailable": "Demo stats are currently unavailable.",
         "help": (
             "Use Subscribe to submit a subscription payment, Run Demo to view simulated "
