@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 from decimal import Decimal
 
+import pytest
+
+import services.core_engine.orders as orders_module
 from services.core_engine.ids import client_order_id
 from services.core_engine.orders import EntryGuard, place_initial_orders
 from services.core_engine.risk import ExecutionLegPlan, ExecutionPlan
@@ -22,10 +25,22 @@ def _order(client_id: str, status: str = "FILLED") -> ExchangeOrder:
 
 
 class FakeExchange:
-    def __init__(self, *, entry_status: str = "FILLED", fail_tp: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        entry_status: str = "FILLED",
+        fail_sl: bool = False,
+        confirm_sl: bool = True,
+        fail_tp_legs: frozenset[int] = frozenset(),
+        fail_emergency_close: bool = False,
+    ) -> None:
         self.calls: list[tuple[str, object]] = []
         self.entry_status = entry_status
-        self.fail_tp = fail_tp
+        self.fail_sl = fail_sl
+        self.confirm_sl = confirm_sl
+        self.fail_tp_legs = fail_tp_legs
+        self.fail_emergency_close = fail_emergency_close
+        self.open_orders: list[ExchangeOrder] = []
 
     async def set_leverage(self, **values: object) -> None:
         self.calls.append(("leverage", values))
@@ -43,13 +58,22 @@ class FakeExchange:
 
     async def place_stop_market(self, **values: object) -> ExchangeOrder:
         self.calls.append(("sl", values))
-        return _order(str(values["client_order_id"]))
+        if self.fail_sl:
+            raise RuntimeError("stop placement failed")
+        order = _order(str(values["client_order_id"]), "NEW")
+        if self.confirm_sl:
+            self.open_orders.append(order)
+        return order
 
     async def place_take_profit_market(self, **values: object) -> ExchangeOrder:
         self.calls.append(("tp", values))
-        if self.fail_tp:
+        client_id = str(values["client_order_id"])
+        leg_index = int(client_id.rsplit("-", maxsplit=1)[-1])
+        if leg_index in self.fail_tp_legs:
             raise RuntimeError("sensitive exchange detail")
-        return _order(str(values["client_order_id"]))
+        order = _order(client_id, "NEW")
+        self.open_orders.append(order)
+        return order
 
     async def cancel_order(self, **values: object) -> None:
         self.calls.append(("cancel", values))
@@ -58,10 +82,29 @@ class FakeExchange:
         return None
 
     async def get_open_orders(self, **values: object) -> list[ExchangeOrder]:
-        return []
+        self.calls.append(("open_orders", values))
+        return list(self.open_orders)
+
+    async def close_position_market(self, **values: object) -> ExchangeOrder:
+        self.calls.append(("close", values))
+        if self.fail_emergency_close:
+            raise RuntimeError("emergency close failed")
+        return _order(str(values["client_order_id"]))
+
+    async def cancel_open_orders(self, **values: object) -> None:
+        self.calls.append(("cancel_all", values))
+        self.open_orders.clear()
 
 
-def _trade_and_plan(*, model3: bool = False) -> tuple[Trade, Signal, ExecutionPlan]:
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(orders_module, "_ORDER_RETRY_DELAYS_SEC", (0, 0))
+    monkeypatch.setattr(orders_module, "_CONFIRM_RETRY_DELAYS_SEC", (0, 0))
+
+
+def _trade_and_plan(
+    *, model3: bool = False, leg_count: int = 1
+) -> tuple[Trade, Signal, ExecutionPlan]:
     signal = Signal(
         id=1,
         symbol="HBARUSDT",
@@ -85,13 +128,14 @@ def _trade_and_plan(*, model3: bool = False) -> tuple[Trade, Signal, ExecutionPl
         qty=Decimal("100"),
         status="pending_entry",
     )
-    legs = () if model3 else (
+    legs = () if model3 else tuple(
         ExecutionLegPlan(
-            leg_index=1,
-            target_price=Decimal("0.07186"),
-            fraction=Decimal("1"),
-            qty=Decimal("100"),
-        ),
+            leg_index=index,
+            target_price=Decimal("0.07145") + Decimal(index) * Decimal("0.00041"),
+            fraction=Decimal("1") / Decimal(leg_count),
+            qty=Decimal("100") / Decimal(leg_count),
+        )
+        for index in range(1, leg_count + 1)
     )
     plan = ExecutionPlan(
         margin_usdt=Decimal("10"),
@@ -107,8 +151,14 @@ def _trade_and_plan(*, model3: bool = False) -> tuple[Trade, Signal, ExecutionPl
     return trade, signal, plan
 
 
-def _run(fake: FakeExchange, *, entry_mode: str = "limit", model3: bool = False):
-    trade, signal, plan = _trade_and_plan(model3=model3)
+def _run(
+    fake: FakeExchange,
+    *,
+    entry_mode: str = "limit",
+    model3: bool = False,
+    leg_count: int = 1,
+):
+    trade, signal, plan = _trade_and_plan(model3=model3, leg_count=leg_count)
     result = asyncio.run(
         place_initial_orders(
             exchange=fake,
@@ -134,6 +184,7 @@ def test_order_sequence_and_deterministic_ids() -> None:
         "isolated",
         "entry_limit",
         "sl",
+        "open_orders",
         "tp",
     ]
     assert result.status == "opened"
@@ -158,10 +209,55 @@ def test_market_mode_is_explicit_and_model3_has_no_tp() -> None:
     assert "tp" not in [name for name, _ in fake.calls]
 
 
-def test_protective_failure_is_safe() -> None:
-    fake = FakeExchange(fail_tp=True)
+def test_sl_placement_failure_emergency_closes_instead_of_opening() -> None:
+    fake = FakeExchange(fail_sl=True)
     _, result = _run(fake)
 
-    assert result.status == "error"
-    assert result.reason == "protective order placement failed"
-    assert "sensitive" not in result.reason
+    assert result.status == "emergency_closed"
+    assert result.sl_order_id is None
+    assert "close" in [name for name, _ in fake.calls]
+    assert result.status != "opened"
+
+
+def test_unconfirmed_sl_emergency_closes_instead_of_opening() -> None:
+    fake = FakeExchange(confirm_sl=False)
+    _, result = _run(fake)
+
+    assert result.status == "emergency_closed"
+    assert result.sl_order_id is None
+    assert "close" in [name for name, _ in fake.calls]
+
+
+def test_confirmed_sl_keeps_trade_open_when_one_tp_leg_fails() -> None:
+    fake = FakeExchange(fail_tp_legs=frozenset({2}))
+    trade, result = _run(fake, leg_count=3)
+
+    assert result.status == "opened"
+    assert result.sl_order_id == client_order_id(trade_id=trade.id, purpose="sl")
+    assert "close" not in [name for name, _ in fake.calls]
+    assert result.tp_order_ids == (
+        client_order_id(trade_id=trade.id, purpose="tp", leg_index=1),
+        client_order_id(trade_id=trade.id, purpose="tp", leg_index=3),
+    )
+
+
+def test_happy_path_confirms_sl_and_places_all_tps() -> None:
+    fake = FakeExchange()
+    trade, result = _run(fake, leg_count=3)
+
+    assert result.status == "opened"
+    assert result.sl_order_id == client_order_id(trade_id=trade.id, purpose="sl")
+    assert result.tp_order_ids == tuple(
+        client_order_id(trade_id=trade.id, purpose="tp", leg_index=index)
+        for index in range(1, 4)
+    )
+
+
+def test_emergency_close_failure_is_loud_and_never_reports_opened() -> None:
+    fake = FakeExchange(fail_sl=True, fail_emergency_close=True)
+    _, result = _run(fake)
+
+    assert result.status == "emergency_close_failed"
+    assert result.sl_order_id is None
+    assert result.status not in {"opened", "error"}
+    assert "cancel_all" not in [name for name, _ in fake.calls]

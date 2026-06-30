@@ -3,7 +3,15 @@ from __future__ import annotations
 import re
 
 
-_PURPOSES = {"entry", "sl", "tp", "be_sl", "model3_exit", "close"}
+_PURPOSES = {
+    "entry",
+    "sl",
+    "tp",
+    "be_sl",
+    "model3_exit",
+    "close",
+    "emergency_close",
+}
 _BINANCE_CLIENT_ID_MAX_LENGTH = 36
 
 

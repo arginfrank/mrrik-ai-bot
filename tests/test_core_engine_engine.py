@@ -7,7 +7,9 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
+import pytest
 
+import services.core_engine.orders as orders_module
 from services.core_engine.engine import CoreEngineConfig, handle_signal_created
 from shared.crypto import encrypt_secret
 from shared.exchange.types import ExchangeOrder, SymbolFilters
@@ -37,10 +39,16 @@ class FakeExchange:
         balance: Decimal = Decimal("100"),
         withdrawal_safe: bool = True,
         fail: bool = False,
+        fail_sl: bool = False,
+        fail_emergency_close: bool = False,
     ) -> None:
         self.balance = balance
         self.withdrawal_safe = withdrawal_safe
         self.fail = fail
+        self.fail_sl = fail_sl
+        self.fail_emergency_close = fail_emergency_close
+        self.calls: list[str] = []
+        self.open_orders: list[ExchangeOrder] = []
 
     async def verify_credentials(self) -> bool:
         return True
@@ -75,27 +83,47 @@ class FakeExchange:
         return _order(str(values["client_order_id"]))
 
     async def place_stop_market(self, **values: object) -> ExchangeOrder:
-        return _order(str(values["client_order_id"]))
+        self.calls.append("sl")
+        if self.fail_sl:
+            raise RuntimeError("stop placement failed")
+        order = _order(str(values["client_order_id"]), status="NEW")
+        self.open_orders.append(order)
+        return order
 
     async def place_take_profit_market(self, **values: object) -> ExchangeOrder:
-        return _order(str(values["client_order_id"]))
+        order = _order(str(values["client_order_id"]), status="NEW")
+        self.open_orders.append(order)
+        return order
+
+    async def get_open_orders(self, **values: object) -> list[ExchangeOrder]:
+        return list(self.open_orders)
 
     async def cancel_open_orders(self, **values: object) -> None:
-        pass
+        self.calls.append("cancel_all")
+        self.open_orders.clear()
 
     async def close_position_market(self, **values: object) -> ExchangeOrder:
+        self.calls.append("close")
+        if self.fail_emergency_close:
+            raise RuntimeError("emergency close failed")
         return _order(str(values["client_order_id"]))
 
 
-def _order(client_id: str) -> ExchangeOrder:
+def _order(client_id: str, *, status: str = "FILLED") -> ExchangeOrder:
     return ExchangeOrder(
         exchange_order_id="1",
         client_order_id=client_id,
         symbol="HBARUSDT",
         side="BUY",
         order_type="MARKET",
-        status="FILLED",
+        status=status,  # type: ignore[arg-type]
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(orders_module, "_ORDER_RETRY_DELAYS_SEC", (0, 0))
+    monkeypatch.setattr(orders_module, "_CONFIRM_RETRY_DELAYS_SEC", (0, 0))
 
 
 class FakeFactory:
@@ -209,7 +237,7 @@ class FakeRepository:
     def set_trade_entry_order(self, *, trade: Trade, entry_order_id: str) -> None:
         trade.entry_order_id = entry_order_id
 
-    def mark_trade_opened(self, *, trade: Trade, sl_order_id: str) -> None:
+    def mark_trade_opened(self, *, trade: Trade, sl_order_id: str | None) -> None:
         trade.status = "open"
         trade.sl_order_id = sl_order_id
 
@@ -218,6 +246,17 @@ class FakeRepository:
 
     def mark_trade_status(self, *, trade: Trade, status: str) -> None:
         trade.status = status
+
+    def close_trade(self, *, trade: Trade, **values: object) -> Trade:
+        trade.status = "closed"
+        trade.closed_reason = str(values["closed_reason"])
+        trade.realized_pnl_usdt = values["realized_pnl_usdt"]  # type: ignore[assignment]
+        trade.realized_roi_pct = values["realized_roi_pct"]  # type: ignore[assignment]
+        trade.touched_tps = list(values["touched_tps"])  # type: ignore[arg-type]
+        for leg in trade.legs:
+            if leg.status == "open":
+                leg.status = "canceled"
+        return trade
 
 
 CONFIG = CoreEngineConfig(
@@ -241,6 +280,7 @@ def _handle(
     *,
     redis_client: FakeRedis | None = None,
     event_id: str | None = None,
+    config: CoreEngineConfig = CONFIG,
 ):
     publisher = FakePublisher()
     result = asyncio.run(
@@ -250,7 +290,7 @@ def _handle(
             repository=repository,
             exchange_factory=FakeFactory(exchange),
             publisher=publisher,
-            config=CONFIG,
+            config=config,
             fernet_key=fernet_key,
             redis_client=redis_client,
         )
@@ -410,3 +450,52 @@ def test_exchange_exception_publishes_only_safe_error() -> None:
     assert publisher.events[-1][1] == "trade.error"
     assert publisher.events[-1][2]["reason"] == "exchange operation failed"
     assert "api-secret" not in repr(publisher.events)
+
+
+def test_emergency_closed_trade_is_persisted_closed_and_notified() -> None:
+    key = Fernet.generate_key().decode()
+    repository = FakeRepository(key)
+    exchange = FakeExchange(fail_sl=True)
+    result, publisher = _handle(
+        repository,
+        exchange,
+        key,
+        config=replace(CONFIG, admin_telegram_ids=(777,)),
+    )
+
+    assert result.error_count == 1
+    assert repository.trade is not None
+    assert repository.trade.status == "closed"
+    assert repository.trade.closed_reason == "aborted_no_protection"
+    assert repository.trade.realized_pnl_usdt == Decimal("0")
+    assert repository.trade.realized_roi_pct == Decimal("0")
+    assert [event_type for _, event_type, _ in publisher.events] == [
+        "trade.closed",
+        "notify.user",
+        "notify.admin",
+    ]
+    assert "aborted for safety" in publisher.events[1][2]["text"]
+
+
+def test_emergency_close_failure_stays_open_for_reconciliation_and_alerts() -> None:
+    key = Fernet.generate_key().decode()
+    repository = FakeRepository(key)
+    exchange = FakeExchange(fail_sl=True, fail_emergency_close=True)
+    result, publisher = _handle(
+        repository,
+        exchange,
+        key,
+        config=replace(CONFIG, admin_telegram_ids=(777,)),
+    )
+
+    assert result.error_count == 1
+    assert repository.trade is not None
+    assert repository.trade.status == "open"
+    assert repository.trade.sl_order_id is None
+    assert [event_type for _, event_type, _ in publisher.events] == [
+        "trade.error",
+        "notify.admin",
+    ]
+    assert publisher.events[0][2]["reason"] == (
+        "stop_loss_unconfirmed_emergency_close_failed"
+    )

@@ -4,15 +4,18 @@ import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 import inspect
+import logging
 from typing import Any, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from shared.crypto import decrypt_secret
 from shared.exchange.binance import to_binance_order_side
+from shared.monitoring import build_admin_alert_payload
 from shared.signal.types import SignalSide
 
 from services.core_engine.events import (
     build_notify_user_payload,
+    build_trade_closed_payload,
     build_trade_error_payload,
     build_trade_opened_payload,
     format_trade_open_message,
@@ -23,6 +26,7 @@ from services.core_engine.orders import EntryGuard, place_initial_orders
 from services.core_engine.risk import ExecutionPlanError, build_execution_plan
 
 
+LOGGER = logging.getLogger(__name__)
 SIGNALS_STREAM = "signals"
 ORDERS_STREAM = "orders"
 NOTIFY_STREAM = "notify"
@@ -50,6 +54,7 @@ class CoreEngineConfig:
     maintenance_margin_rate: Decimal
     leverage_cap: int | None = None
     signal_lookup_retry_delays_sec: tuple[float, ...] = (0.05, 0.15, 0.4)
+    admin_telegram_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,13 @@ def config_from_app_config(app_config: object) -> CoreEngineConfig:
     risk = getattr(file_config, "risk")
     execution = getattr(file_config, "execution")
     retry = getattr(file_config, "retry", None)
+    env_config = getattr(app_config, "env", None)
+    admin_value = getattr(env_config, "admin_telegram_ids", None)
+    admin_ids = (
+        tuple(int(item.strip()) for item in admin_value.split(",") if item.strip())
+        if admin_value
+        else ()
+    )
     return CoreEngineConfig(
         fixed_margin_usdt=Decimal(risk.fixed_margin_usdt),
         risk_model=int(risk.default_model),
@@ -86,6 +98,7 @@ def config_from_app_config(app_config: object) -> CoreEngineConfig:
                 (0.05, 0.15, 0.4),
             )
         ),
+        admin_telegram_ids=admin_ids,
     )
 
 
@@ -282,6 +295,84 @@ async def handle_signal_created(
                 )
                 skipped += 1
                 continue
+            if order_result.status == "emergency_closed":
+                closed_trade = repository.close_trade(  # type: ignore[attr-defined]
+                    trade=trade,
+                    closed_reason="aborted_no_protection",
+                    realized_pnl_usdt=Decimal("0"),
+                    realized_roi_pct=Decimal("0"),
+                    touched_tps=(),
+                )
+                LOGGER.error(
+                    "event_type=trade_open status=emergency_closed "
+                    "trade_id=%s user_id=%s symbol=%s",
+                    trade.id,
+                    user_id,
+                    trade.symbol,
+                )
+                await _publish_safely(
+                    publisher=publisher,
+                    stream=ORDERS_STREAM,
+                    event_type="trade.closed",
+                    payload=build_trade_closed_payload(closed_trade),
+                )
+                await _publish_safely(
+                    publisher=publisher,
+                    stream=NOTIFY_STREAM,
+                    event_type="notify.user",
+                    payload=build_notify_user_payload(
+                        user=user,
+                        text=(
+                            f"{trade.symbol} trade aborted for safety: "
+                            "no stop-loss could be confirmed."
+                        ),
+                    ),
+                )
+                await _publish_admin_alerts(
+                    publisher=publisher,
+                    admin_telegram_ids=config.admin_telegram_ids,
+                    text=(
+                        f"Trade {trade.id} ({trade.symbol}) was emergency-closed "
+                        "because no stop-loss could be confirmed."
+                    ),
+                )
+                errors += 1
+                continue
+            if order_result.status == "emergency_close_failed":
+                repository.mark_trade_opened(  # type: ignore[attr-defined]
+                    trade=trade, sl_order_id=None
+                )
+                LOGGER.critical(
+                    "event_type=trade_open status=emergency_close_failed "
+                    "trade_id=%s user_id=%s symbol=%s",
+                    trade.id,
+                    user_id,
+                    trade.symbol,
+                )
+                await _publish_safely(
+                    publisher=publisher,
+                    stream=ORDERS_STREAM,
+                    event_type="trade.error",
+                    payload=build_trade_error_payload(
+                        user_id=user_id,
+                        signal_id=signal.id,
+                        symbol=signal.symbol,
+                        reason=(
+                            order_result.reason
+                            or "stop_loss_unconfirmed_emergency_close_failed"
+                        ),
+                    ),
+                )
+                await _publish_admin_alerts(
+                    publisher=publisher,
+                    admin_telegram_ids=config.admin_telegram_ids,
+                    text=(
+                        f"CRITICAL: trade {trade.id} ({trade.symbol}) may be open "
+                        "without a confirmed stop-loss; emergency close failed."
+                    ),
+                )
+                errors += 1
+                continue
             if order_result.status != "opened":
                 await _close_after_protection_failure(exchange=exchange, trade=trade)
                 _mark_trade_status(repository, trade, "error")
@@ -298,10 +389,17 @@ async def handle_signal_created(
                 trade=trade, sl_order_id=order_result.sl_order_id
             )
             legs_by_index = {leg.leg_index: leg for leg in trade.legs}
-            for plan_leg, tp_id in zip(plan.legs, order_result.tp_order_ids, strict=True):
-                repository.set_leg_tp_order(  # type: ignore[attr-defined]
-                    leg=legs_by_index[plan_leg.leg_index], tp_order_id=tp_id
+            placed_tp_ids = set(order_result.tp_order_ids)
+            for plan_leg in plan.legs:
+                tp_id = client_order_id(
+                    trade_id=trade.id,
+                    purpose="tp",
+                    leg_index=plan_leg.leg_index,
                 )
+                if tp_id in placed_tp_ids:
+                    repository.set_leg_tp_order(  # type: ignore[attr-defined]
+                        leg=legs_by_index[plan_leg.leg_index], tp_order_id=tp_id
+                    )
             opened += 1
             try:
                 await publisher.publish(
@@ -414,6 +512,42 @@ async def _publish_error(
     )
 
 
+async def _publish_safely(
+    *,
+    publisher: EventPublisher,
+    stream: str,
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    try:
+        await publisher.publish(
+            stream=stream,
+            event_type=event_type,
+            payload=payload,
+        )
+    except Exception:
+        LOGGER.error("event_type=%s status=publish_failed", event_type)
+
+
+async def _publish_admin_alerts(
+    *,
+    publisher: EventPublisher,
+    admin_telegram_ids: tuple[int, ...],
+    text: str,
+) -> None:
+    for admin_id in admin_telegram_ids:
+        await _publish_safely(
+            publisher=publisher,
+            stream=NOTIFY_STREAM,
+            event_type="notify.admin",
+            payload=build_admin_alert_payload(
+                admin_telegram_id=admin_id,
+                text=text,
+                severity="critical",
+            ),
+        )
+
+
 async def _create_exchange(
     factory: object, *, api_key: str, api_secret: str, user_id: int
 ) -> Any:
@@ -482,12 +616,18 @@ def _mark_trade_status(repository: object, trade: Any, status: str) -> None:
 
 async def _close_after_protection_failure(*, exchange: Any, trade: Any) -> None:
     try:
-        await exchange.cancel_open_orders(symbol=trade.symbol)
         await exchange.close_position_market(
             symbol=trade.symbol,
             side=to_binance_order_side(trade_side=trade.side, action="close"),
             qty=None,
             client_order_id=client_order_id(trade_id=trade.id, purpose="close"),
         )
+        await exchange.cancel_open_orders(symbol=trade.symbol)
     except Exception:
+        LOGGER.critical(
+            "event_type=protection_failure_close status=failed "
+            "trade_id=%s symbol=%s",
+            trade.id,
+            trade.symbol,
+        )
         return
