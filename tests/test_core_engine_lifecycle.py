@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 from decimal import Decimal
 
+import pytest
+
+import services.core_engine.lifecycle as lifecycle_module
 from services.core_engine.ids import client_order_id
 from services.core_engine.lifecycle import (
     handle_liquidation_update,
@@ -14,8 +17,9 @@ from shared.models import Signal, Trade, TradeLeg
 
 
 class FakeRepository:
-    def __init__(self, trade: Trade) -> None:
+    def __init__(self, trade: Trade, events: list[str] | None = None) -> None:
         self.trade = trade
+        self.events = events
 
     def get_trade_leg_by_client_order_id(self, value: str):
         for leg in self.trade.legs:
@@ -35,6 +39,8 @@ class FakeRepository:
         return leg
 
     def set_trade_sl_order(self, *, trade: Trade, sl_order_id: str) -> None:
+        if self.events is not None:
+            self.events.append("store_sl")
         trade.sl_order_id = sl_order_id
 
     def close_trade(self, *, trade: Trade, **values: object) -> Trade:
@@ -57,30 +63,61 @@ class FakeRepository:
 
 
 class FakeExchange:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        fail_stop: bool = False,
+        events: list[str] | None = None,
+    ) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.fail_stop = fail_stop
+        self.events = events
+        self.open_orders: list[ExchangeOrder] = []
 
     async def cancel_order(self, **values: object) -> None:
         self.calls.append(("cancel", values))
+        if self.events is not None:
+            self.events.append("cancel_old_sl")
+        client_id = str(values["client_order_id"])
+        self.open_orders = [
+            order for order in self.open_orders if order.client_order_id != client_id
+        ]
 
     async def place_stop_market(self, **values: object) -> ExchangeOrder:
         self.calls.append(("sl", values))
-        return _order(str(values["client_order_id"]))
+        if self.events is not None:
+            self.events.append("place_new_sl")
+        if self.fail_stop:
+            raise RuntimeError("break-even stop failed")
+        order = _order(str(values["client_order_id"]), status="NEW")
+        self.open_orders.append(order)
+        return order
+
+    async def get_open_orders(self, **values: object) -> list[ExchangeOrder]:
+        self.calls.append(("open_orders", values))
+        if self.events is not None:
+            self.events.append("confirm_new_sl")
+        return list(self.open_orders)
 
     async def close_position_market(self, **values: object) -> ExchangeOrder:
         self.calls.append(("close", values))
         return _order(str(values["client_order_id"]))
 
 
-def _order(client_id: str) -> ExchangeOrder:
+def _order(client_id: str, *, status: str = "FILLED") -> ExchangeOrder:
     return ExchangeOrder(
         exchange_order_id="1",
         client_order_id=client_id,
         symbol="HBARUSDT",
         side="SELL",
         order_type="MARKET",
-        status="FILLED",
+        status=status,  # type: ignore[arg-type]
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(lifecycle_module, "_BE_RETRY_DELAYS_SEC", (0, 0))
 
 
 def _trade(*, leg_count: int = 2, model3: bool = False) -> Trade:
@@ -151,9 +188,53 @@ def test_tp1_fill_marks_leg_and_can_move_stop_to_break_even() -> None:
 
     assert result.status == "leg_filled"
     assert trade.legs[0].status == "filled"
-    assert [name for name, _ in exchange.calls] == ["cancel", "sl"]
+    assert [name for name, _ in exchange.calls] == ["sl", "open_orders", "cancel"]
     assert trade.sl_order_id == client_order_id(trade_id=trade.id, purpose="be_sl")
-    assert exchange.calls[-1][1]["stop_price"] == trade.signal.entry
+    assert exchange.calls[0][1]["stop_price"] == trade.signal.entry
+
+
+def test_be_stop_placement_failure_keeps_old_stop_and_stored_id() -> None:
+    trade = _trade()
+    old_sl_id = trade.sl_order_id
+    repository = FakeRepository(trade)
+    exchange = FakeExchange(fail_stop=True)
+
+    result = asyncio.run(
+        handle_user_stream_event(
+            event=_fill(trade.legs[0].tp_order_id or "", trade.legs[0].target_price),
+            repository=repository,
+            exchange=exchange,
+            move_sl_to_be_after_tp1=True,
+        )
+    )
+
+    assert result.status == "leg_filled"
+    assert trade.sl_order_id == old_sl_id
+    assert "cancel" not in [name for name, _ in exchange.calls]
+
+
+def test_be_stop_is_confirmed_before_old_stop_cancel_and_storage_update() -> None:
+    events: list[str] = []
+    trade = _trade()
+    repository = FakeRepository(trade, events)
+    exchange = FakeExchange(events=events)
+
+    asyncio.run(
+        handle_user_stream_event(
+            event=_fill(trade.legs[0].tp_order_id or "", trade.legs[0].target_price),
+            repository=repository,
+            exchange=exchange,
+            move_sl_to_be_after_tp1=True,
+        )
+    )
+
+    assert events == [
+        "place_new_sl",
+        "confirm_new_sl",
+        "cancel_old_sl",
+        "store_sl",
+    ]
+    assert trade.sl_order_id == client_order_id(trade_id=trade.id, purpose="be_sl")
 
 
 def test_all_tps_close_with_blended_exchange_prices() -> None:

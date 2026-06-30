@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 from decimal import Decimal
+import logging
 
 from shared.exchange.binance import to_binance_order_side
 from shared.exchange.client import ExchangeClient
@@ -13,6 +15,10 @@ from shared.signal.types import SignalSide
 
 from services.core_engine.ids import client_order_id
 from services.core_engine.repository import CoreRepository
+
+
+LOGGER = logging.getLogger(__name__)
+_BE_RETRY_DELAYS_SEC = (0.2, 0.5)
 
 
 @dataclass(frozen=True)
@@ -70,19 +76,44 @@ async def handle_user_stream_event(
 
         if move_sl_to_be_after_tp1 and leg.leg_index == 1:
             entry = _entry_price(trade)
-            if trade.sl_order_id:
-                await exchange.cancel_order(
-                    symbol=trade.symbol,
-                    client_order_id=trade.sl_order_id,
-                )
+            old_sl_id = trade.sl_order_id
             be_id = client_order_id(trade_id=trade.id, purpose="be_sl")
-            await exchange.place_stop_market(
-                symbol=trade.symbol,
-                side=to_binance_order_side(trade_side=trade.side, action="close"),
+            placed = await _place_break_even_stop(
+                exchange=exchange,
+                trade=trade,
                 stop_price=entry,
                 client_order_id=be_id,
-                close_position=True,
             )
+            confirmed = placed and await _confirm_open_order(
+                exchange=exchange,
+                symbol=trade.symbol,
+                client_order_id=be_id,
+            )
+            if not confirmed:
+                LOGGER.warning(
+                    "event_type=break_even_stop status=unconfirmed "
+                    "trade_id=%s symbol=%s old_client_order_id=%s",
+                    trade.id,
+                    trade.symbol,
+                    old_sl_id,
+                )
+                return LifecycleResult(
+                    status="leg_filled", trade_id=trade.id, leg_index=leg.leg_index
+                )
+            if old_sl_id and old_sl_id != be_id:
+                try:
+                    await exchange.cancel_order(
+                        symbol=trade.symbol,
+                        client_order_id=old_sl_id,
+                    )
+                except Exception:
+                    LOGGER.warning(
+                        "event_type=break_even_stop status=old_stop_cancel_failed "
+                        "trade_id=%s symbol=%s old_client_order_id=%s",
+                        trade.id,
+                        trade.symbol,
+                        old_sl_id,
+                    )
             repository.set_trade_sl_order(trade=trade, sl_order_id=be_id)
         return LifecycleResult(
             status="leg_filled", trade_id=trade.id, leg_index=leg.leg_index
@@ -177,6 +208,47 @@ async def handle_mark_price_for_model3(
         )
         results.append(_closed_result(closed))
     return results
+
+
+async def _place_break_even_stop(
+    *,
+    exchange: ExchangeClient,
+    trade: Trade,
+    stop_price: Decimal,
+    client_order_id: str,
+) -> bool:
+    for attempt in range(len(_BE_RETRY_DELAYS_SEC) + 1):
+        try:
+            await exchange.place_stop_market(
+                symbol=trade.symbol,
+                side=to_binance_order_side(trade_side=trade.side, action="close"),
+                stop_price=stop_price,
+                client_order_id=client_order_id,
+                close_position=True,
+            )
+            return True
+        except Exception:
+            if attempt == len(_BE_RETRY_DELAYS_SEC):
+                return False
+            await asyncio.sleep(_BE_RETRY_DELAYS_SEC[attempt])
+    return False
+
+
+async def _confirm_open_order(
+    *, exchange: ExchangeClient, symbol: str, client_order_id: str
+) -> bool:
+    for attempt in range(len(_BE_RETRY_DELAYS_SEC) + 1):
+        try:
+            open_orders = await exchange.get_open_orders(symbol=symbol)
+            if any(
+                order.client_order_id == client_order_id for order in open_orders
+            ):
+                return True
+        except Exception:
+            pass
+        if attempt < len(_BE_RETRY_DELAYS_SEC):
+            await asyncio.sleep(_BE_RETRY_DELAYS_SEC[attempt])
+    return False
 
 
 async def handle_liquidation_update(
