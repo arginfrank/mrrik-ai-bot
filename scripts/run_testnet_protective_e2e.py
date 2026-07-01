@@ -110,8 +110,8 @@ async def _run_scenario(settings: AppSettings) -> dict[str, Any]:
             ),
         )
 
-        open_orders = await exchange.get_open_orders(symbol=_SYMBOL)
-        open_client_ids = {order.client_order_id for order in open_orders}
+        open_algo_orders = await exchange.get_open_algo_orders(symbol=_SYMBOL)
+        open_client_ids = {order.client_order_id for order in open_algo_orders}
         position = await exchange.get_position(symbol=_SYMBOL)
         sl_confirmed = (
             result.sl_order_id is not None
@@ -133,7 +133,7 @@ async def _run_scenario(settings: AppSettings) -> dict[str, Any]:
                 "sl_confirmed": sl_confirmed,
                 "tp_order_ids": tp_order_ids,
                 "tp_confirmed_count": len(tp_order_ids),
-                "open_order_count": len(open_orders),
+                "open_order_count": len(open_algo_orders),
                 "position_qty_after_open": _position_qty(position),
             }
         )
@@ -157,7 +157,8 @@ async def _run_scenario(settings: AppSettings) -> dict[str, Any]:
 async def _require_flat_start(exchange: BinanceFuturesClient) -> None:
     position = await exchange.get_position(symbol=_SYMBOL)
     open_orders = await exchange.get_open_orders(symbol=_SYMBOL)
-    if position is not None or open_orders:
+    open_algo_orders = await exchange.get_open_algo_orders(symbol=_SYMBOL)
+    if position is not None or open_orders or open_algo_orders:
         raise _ScenarioRefusal(
             "BTCUSDT testnet state was not flat before the scenario; cleanup was attempted"
         )
@@ -250,6 +251,10 @@ async def _cleanup(
         await exchange.cancel_open_orders(symbol=_SYMBOL)
     except Exception:
         errors.append("cancel_open_orders")
+    try:
+        await exchange.cancel_all_algo_orders(symbol=_SYMBOL)
+    except Exception:
+        errors.append("cancel_all_algo_orders")
 
     position = await _get_position_for_cleanup(exchange, errors=errors)
     if position is not None:
@@ -306,8 +311,9 @@ async def _verify_cleanup(
         try:
             position = await exchange.get_position(symbol=_SYMBOL)
             open_orders = await exchange.get_open_orders(symbol=_SYMBOL)
+            open_algo_orders = await exchange.get_open_algo_orders(symbol=_SYMBOL)
             residual_position = position is not None
-            residual_orders = len(open_orders)
+            residual_orders = len(open_orders) + len(open_algo_orders)
             if not residual_position and residual_orders == 0:
                 return False, 0
         except Exception:
