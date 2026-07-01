@@ -191,6 +191,7 @@ def test_tp1_fill_marks_leg_and_can_move_stop_to_break_even() -> None:
     assert [name for name, _ in exchange.calls] == ["sl", "open_orders", "cancel"]
     assert trade.sl_order_id == client_order_id(trade_id=trade.id, purpose="be_sl")
     assert exchange.calls[0][1]["stop_price"] == trade.signal.entry
+    assert exchange.calls[0][1]["qty"] == Decimal("50")
 
 
 def test_be_stop_placement_failure_keeps_old_stop_and_stored_id() -> None:
@@ -211,6 +212,27 @@ def test_be_stop_placement_failure_keeps_old_stop_and_stored_id() -> None:
     assert result.status == "leg_filled"
     assert trade.sl_order_id == old_sl_id
     assert "cancel" not in [name for name, _ in exchange.calls]
+
+
+def test_be_stop_skips_when_no_quantity_remains() -> None:
+    trade = _trade(leg_count=2)
+    trade.legs[0].qty = Decimal("100")
+    trade.legs[1].qty = Decimal("0")
+    repository = FakeRepository(trade)
+    exchange = FakeExchange()
+
+    result = asyncio.run(
+        handle_user_stream_event(
+            event=_fill(trade.legs[0].tp_order_id or "", trade.legs[0].target_price),
+            repository=repository,
+            exchange=exchange,
+            move_sl_to_be_after_tp1=True,
+        )
+    )
+
+    assert result.status == "leg_filled"
+    assert "sl" not in [name for name, _ in exchange.calls]
+    assert trade.sl_order_id == client_order_id(trade_id=trade.id, purpose="sl")
 
 
 def test_be_stop_is_confirmed_before_old_stop_cancel_and_storage_update() -> None:

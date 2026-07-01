@@ -198,6 +198,9 @@ def test_order_sequence_and_deterministic_ids() -> None:
     assert result.status == "opened"
     assert result.entry_order_id == client_order_id(trade_id=trade.id, purpose="entry")
     assert result.sl_order_id == client_order_id(trade_id=trade.id, purpose="sl")
+    sl_call = next(values for name, values in fake.calls if name == "sl")
+    assert isinstance(sl_call, dict)
+    assert sl_call["qty"] == Decimal("100")
 
 
 def test_limit_guard_cancels_unfilled_entry() -> None:

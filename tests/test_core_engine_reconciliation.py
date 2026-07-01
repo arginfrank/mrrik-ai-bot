@@ -126,6 +126,81 @@ def test_missing_sl_and_tp_are_repaired_with_deterministic_ids() -> None:
         trade.sl_order_id,
         trade.legs[0].tp_order_id,
     }
+    sl_write = next(values for kind, values in exchange.writes if kind == "sl")
+    assert sl_write["qty"] == Decimal("100")
+
+
+def test_missing_sl_is_repaired_with_remaining_quantity() -> None:
+    trade = _trade()
+    trade.legs = [
+        TradeLeg(
+            leg_index=1,
+            target_price=Decimal("0.07186"),
+            qty=Decimal("40"),
+            status="filled",
+        ),
+        TradeLeg(
+            leg_index=2,
+            target_price=Decimal("0.07227"),
+            qty=Decimal("60"),
+            status="open",
+            tp_order_id=client_order_id(
+                trade_id=trade.id, purpose="tp", leg_index=2
+            ),
+        ),
+    ]
+    repository = FakeRepository(trade)
+    exchange = FakeExchange(
+        has_position=True,
+        orders=[
+            ExchangeOrder(
+                exchange_order_id="2",
+                client_order_id=trade.legs[1].tp_order_id or "",
+                symbol=trade.symbol,
+                side="SELL",
+                order_type="TAKE_PROFIT_MARKET",
+                status="NEW",
+            )
+        ],
+    )
+
+    result = asyncio.run(
+        reconcile_open_trades(
+            repository=repository, exchange_factory=Factory(exchange)
+        )
+    )
+
+    assert result.repaired_orders == 1
+    assert exchange.writes == [
+        (
+            "sl",
+            {
+                "symbol": "HBARUSDT",
+                "side": "SELL",
+                "qty": Decimal("60"),
+                "stop_price": Decimal("0.07077"),
+                "client_order_id": client_order_id(
+                    trade_id=trade.id, purpose="sl"
+                ),
+            },
+        )
+    ]
+
+
+def test_missing_sl_is_not_repaired_when_no_quantity_remains() -> None:
+    trade = _trade()
+    trade.legs[0].status = "filled"
+    repository = FakeRepository(trade)
+    exchange = FakeExchange(has_position=True, orders=[])
+
+    result = asyncio.run(
+        reconcile_open_trades(
+            repository=repository, exchange_factory=Factory(exchange)
+        )
+    )
+
+    assert result.repaired_orders == 0
+    assert exchange.writes == []
 
 
 def test_missing_exchange_truth_closes_unknown_and_records_note() -> None:

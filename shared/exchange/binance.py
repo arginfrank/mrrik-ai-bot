@@ -154,9 +154,9 @@ class BinanceFuturesClient:
         *,
         symbol: str,
         side: str,
+        qty: Decimal,
         stop_price: Decimal,
         client_order_id: str,
-        close_position: bool,
     ) -> ExchangeOrder:
         raw = await self._signed_request(
             "POST",
@@ -167,8 +167,9 @@ class BinanceFuturesClient:
                 "side": side,
                 "type": "STOP_MARKET",
                 "triggerPrice": _decimal_string(stop_price),
+                "quantity": _decimal_string(qty),
+                "reduceOnly": "true",
                 "workingType": "MARK_PRICE",
-                "closePosition": "true",
                 "clientAlgoId": client_order_id,
             },
         )
