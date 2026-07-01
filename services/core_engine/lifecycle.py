@@ -74,12 +74,31 @@ async def handle_user_stream_event(
             return _closed_result(closed, leg_index=leg.leg_index)
 
         if move_sl_to_be_after_tp1 and leg.leg_index == 1:
+            remaining = Decimal(trade.qty) - sum(
+                (
+                    Decimal(item.qty)
+                    for item in trade.legs
+                    if item.status == "filled"
+                ),
+                Decimal("0"),
+            )
+            if remaining <= 0:
+                LOGGER.info(
+                    "event_type=break_even_stop status=skipped_no_remaining_qty "
+                    "trade_id=%s symbol=%s",
+                    trade.id,
+                    trade.symbol,
+                )
+                return LifecycleResult(
+                    status="leg_filled", trade_id=trade.id, leg_index=leg.leg_index
+                )
             entry = _entry_price(trade)
             old_sl_id = trade.sl_order_id
             be_id = client_order_id(trade_id=trade.id, purpose="be_sl")
             placed = await _place_break_even_stop(
                 exchange=exchange,
                 trade=trade,
+                qty=remaining,
                 stop_price=entry,
                 client_order_id=be_id,
             )
@@ -208,6 +227,7 @@ async def _place_break_even_stop(
     *,
     exchange: ExchangeClient,
     trade: Trade,
+    qty: Decimal,
     stop_price: Decimal,
     client_order_id: str,
 ) -> bool:
@@ -216,9 +236,9 @@ async def _place_break_even_stop(
             await exchange.place_stop_market(
                 symbol=trade.symbol,
                 side=to_binance_order_side(trade_side=trade.side, action="close"),
+                qty=qty,
                 stop_price=stop_price,
                 client_order_id=client_order_id,
-                close_position=True,
             )
             return True
         except Exception:

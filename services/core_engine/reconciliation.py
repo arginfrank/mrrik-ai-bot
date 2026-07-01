@@ -67,20 +67,30 @@ async def reconcile_open_trades(
                 trade_id=trade.id, purpose="sl"
             )
             if sl_id not in open_ids:
-                stop_price = (
-                    Decimal(signal.entry)
-                    if sl_id == client_order_id(trade_id=trade.id, purpose="be_sl")
-                    else Decimal(signal.stop_loss)
+                remaining = Decimal(trade.qty) - sum(
+                    (
+                        Decimal(leg.qty)
+                        for leg in trade.legs
+                        if leg.status == "filled"
+                    ),
+                    Decimal("0"),
                 )
-                await exchange.place_stop_market(
-                    symbol=trade.symbol,
-                    side=close_side,
-                    stop_price=stop_price,
-                    client_order_id=sl_id,
-                    close_position=True,
-                )
-                repository.set_trade_sl_order(trade=trade, sl_order_id=sl_id)
-                repaired += 1
+                if remaining > 0:
+                    stop_price = (
+                        Decimal(signal.entry)
+                        if sl_id
+                        == client_order_id(trade_id=trade.id, purpose="be_sl")
+                        else Decimal(signal.stop_loss)
+                    )
+                    await exchange.place_stop_market(
+                        symbol=trade.symbol,
+                        side=close_side,
+                        qty=remaining,
+                        stop_price=stop_price,
+                        client_order_id=sl_id,
+                    )
+                    repository.set_trade_sl_order(trade=trade, sl_order_id=sl_id)
+                    repaired += 1
             for leg in trade.legs:
                 if leg.status != "open":
                     continue

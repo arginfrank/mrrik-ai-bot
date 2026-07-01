@@ -103,13 +103,14 @@ async def place_protective_orders(
     trade: Trade,
     plan: ExecutionPlan,
 ) -> OpenTradeResult:
-    """Confirm a live closePosition SL before placing any optional TP legs."""
+    """Confirm a live reduce-only SL before placing any optional TP legs."""
     close_side = to_binance_order_side(trade_side=trade.side, action="close")
     sl_id = client_order_id(trade_id=trade.id, purpose="sl")
     await _place_stop_market_with_retry(
         exchange=exchange,
         symbol=trade.symbol,
         side=close_side,
+        qty=plan.qty,
         stop_price=plan.stop_loss,
         client_order_id=sl_id,
     )
@@ -167,6 +168,7 @@ async def _place_stop_market_with_retry(
     exchange: ExchangeClient,
     symbol: str,
     side: str,
+    qty: Decimal,
     stop_price: Decimal,
     client_order_id: str,
 ) -> bool:
@@ -175,9 +177,9 @@ async def _place_stop_market_with_retry(
             await exchange.place_stop_market(
                 symbol=symbol,
                 side=side,
+                qty=qty,
                 stop_price=stop_price,
                 client_order_id=client_order_id,
-                close_position=True,
             )
             return True
         except Exception:

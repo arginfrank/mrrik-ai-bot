@@ -92,7 +92,7 @@ def test_parse_exchange_order_supports_algo_response_fields() -> None:
             "algoStatus": "NEW",
             "triggerPrice": "0.07077",
             "quantity": "100",
-            "closePosition": "true",
+            "reduceOnly": "true",
         }
     )
 
@@ -102,10 +102,11 @@ def test_parse_exchange_order_supports_algo_response_fields() -> None:
     assert order.status == "NEW"
     assert order.stop_price == Decimal("0.07077")
     assert order.qty == Decimal("100")
-    assert order.close_position is True
+    assert order.reduce_only is True
+    assert order.close_position is False
 
 
-def test_stop_market_uses_algo_endpoint_without_quantity_or_reduce_only(
+def test_stop_market_uses_algo_endpoint_with_quantity_and_reduce_only(
     monkeypatch,
 ) -> None:
     client = BinanceFuturesClient(api_key="", api_secret="")
@@ -122,9 +123,9 @@ def test_stop_market_uses_algo_endpoint_without_quantity_or_reduce_only(
         client.place_stop_market(
             symbol="HBARUSDT",
             side="SELL",
+            qty=Decimal("100"),
             stop_price=Decimal("0.07077"),
             client_order_id="m7-9-sl",
-            close_position=True,
         )
     )
 
@@ -138,14 +139,14 @@ def test_stop_market_uses_algo_endpoint_without_quantity_or_reduce_only(
                 "side": "SELL",
                 "type": "STOP_MARKET",
                 "triggerPrice": "0.07077",
+                "quantity": "100",
+                "reduceOnly": "true",
                 "workingType": "MARK_PRICE",
-                "closePosition": "true",
                 "clientAlgoId": "m7-9-sl",
             },
         )
     ]
-    assert "quantity" not in calls[0][2]
-    assert "reduceOnly" not in calls[0][2]
+    assert "closePosition" not in calls[0][2]
     assert order.client_order_id == "m7-9-sl"
 
 

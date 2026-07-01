@@ -54,9 +54,9 @@ class ExchangeClient(Protocol):
         *,
         symbol: str,
         side: str,
+        qty: Decimal,
         stop_price: Decimal,
         client_order_id: str,
-        close_position: bool,
     ) -> ExchangeOrder: ...
 
     async def place_take_profit_market(
