@@ -7,6 +7,7 @@ from decimal import Decimal
 import hashlib
 import hmac
 import json
+import logging
 import time
 from typing import Any, cast
 from urllib.parse import urlencode
@@ -24,6 +25,7 @@ from shared.exchange.types import (
 )
 
 
+LOGGER = logging.getLogger(__name__)
 _PRODUCTION_REST_URL = "https://fapi.binance.com"
 _TESTNET_REST_URL = "https://testnet.binancefuture.com"
 _PRODUCTION_WS_URL = "wss://fstream.binance.com"
@@ -423,12 +425,17 @@ def parse_user_stream_event(raw: dict[str, Any]) -> UserStreamEvent | None:
         if not isinstance(algo_order, dict):
             dict_children = [value for value in raw.values() if isinstance(value, dict)]
             if len(dict_children) != 1:
+                _log_unparseable_algo_update(raw)
                 return None
             algo_order = dict_children[0]
+        client_order_id = _optional_string(algo_order.get("caid"))
+        if client_order_id is None:
+            _log_unparseable_algo_update(raw)
+            return None
         return UserStreamEvent(
             event_type="ALGO_UPDATE",
             symbol=_optional_string(algo_order.get("s")),
-            client_order_id=_optional_string(algo_order.get("caid")),
+            client_order_id=client_order_id,
             order_status=_optional_string(algo_order.get("X")),
             last_filled_qty=_optional_decimal(algo_order.get("aq")),
             last_filled_price=_optional_decimal(algo_order.get("ap")),
@@ -438,6 +445,13 @@ def parse_user_stream_event(raw: dict[str, Any]) -> UserStreamEvent | None:
     if event_type in {"ACCOUNT_UPDATE", "MARGIN_CALL", "ACCOUNT_CONFIG_UPDATE"}:
         return UserStreamEvent(event_type=str(event_type), raw=dict(raw))
     return None
+
+
+def _log_unparseable_algo_update(raw: dict[str, Any]) -> None:
+    LOGGER.error(
+        "ALGO_UPDATE could not be parsed - inspect payload shape raw=%s",
+        json.dumps(raw, default=str, sort_keys=True),
+    )
 
 
 def to_binance_order_side(*, trade_side: str, action: str) -> str:

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
+import logging
 
+import pytest
 import websockets
 
 from shared.exchange.binance import (
@@ -414,6 +416,20 @@ def test_parse_user_stream_algo_fill_supports_alternate_inner_key() -> None:
     assert event is not None
     assert event.client_order_id == "mrrik-1-sl"
     assert event.order_status == "FINISHED"
+
+
+def test_malformed_algo_update_logs_full_payload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    raw = {"e": "ALGO_UPDATE", "unexpected": "payload"}
+
+    with caplog.at_level(logging.ERROR, logger="shared.exchange.binance"):
+        event = parse_user_stream_event(raw)
+
+    assert event is None
+    assert "ALGO_UPDATE could not be parsed - inspect payload shape" in caplog.text
+    assert '"e": "ALGO_UPDATE"' in caplog.text
+    assert '"unexpected": "payload"' in caplog.text
 
 
 def test_order_side_mapping() -> None:
