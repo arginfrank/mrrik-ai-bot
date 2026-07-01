@@ -173,6 +173,139 @@ def _fill(client_id: str, price: Decimal) -> UserStreamEvent:
     )
 
 
+def _algo_fill(
+    client_id: str,
+    price: Decimal,
+    *,
+    status: str = "FINISHED",
+    realized_pnl: Decimal | None = None,
+) -> UserStreamEvent:
+    return UserStreamEvent(
+        event_type="ALGO_UPDATE",
+        client_order_id=client_id,
+        order_status=status,
+        last_filled_price=price,
+        realized_pnl=realized_pnl,
+    )
+
+
+def test_entry_order_trade_fill_still_works() -> None:
+    trade = _trade()
+
+    result = asyncio.run(
+        handle_user_stream_event(
+            event=_fill(trade.entry_order_id or "", trade.signal.entry),
+            repository=FakeRepository(trade),
+            exchange=FakeExchange(),
+            move_sl_to_be_after_tp1=True,
+        )
+    )
+
+    assert result.status == "entry_filled"
+    assert result.trade_id == trade.id
+
+
+def test_algo_sl_fill_closes_with_exchange_realized_pnl() -> None:
+    trade = _trade()
+    realized_pnl = Decimal("-3.75")
+
+    result = asyncio.run(
+        handle_user_stream_event(
+            event=_algo_fill(
+                trade.sl_order_id or "",
+                trade.signal.stop_loss,
+                realized_pnl=realized_pnl,
+            ),
+            repository=FakeRepository(trade),
+            exchange=FakeExchange(),
+            move_sl_to_be_after_tp1=True,
+        )
+    )
+
+    assert result.status == "closed"
+    assert result.closed_reason == "sl"
+    assert result.realized_pnl_usdt == realized_pnl
+
+
+def test_algo_tp1_fill_uses_existing_leg_and_break_even_path() -> None:
+    trade = _trade()
+    exchange = FakeExchange()
+
+    result = asyncio.run(
+        handle_user_stream_event(
+            event=_algo_fill(
+                trade.legs[0].tp_order_id or "", trade.legs[0].target_price
+            ),
+            repository=FakeRepository(trade),
+            exchange=exchange,
+            move_sl_to_be_after_tp1=True,
+        )
+    )
+
+    assert result.status == "leg_filled"
+    assert trade.legs[0].status == "filled"
+    assert trade.sl_order_id == client_order_id(trade_id=trade.id, purpose="be_sl")
+    assert [name for name, _ in exchange.calls] == ["sl", "open_orders", "cancel"]
+
+
+def test_intermediate_algo_update_is_ignored() -> None:
+    trade = _trade()
+
+    result = asyncio.run(
+        handle_user_stream_event(
+            event=_algo_fill(
+                trade.sl_order_id or "", trade.signal.stop_loss, status="TRIGGERED"
+            ),
+            repository=FakeRepository(trade),
+            exchange=FakeExchange(),
+            move_sl_to_be_after_tp1=True,
+        )
+    )
+
+    assert result.status == "ignored"
+    assert trade.status == "open"
+
+
+def test_unknown_algo_fill_is_ignored() -> None:
+    trade = _trade()
+
+    result = asyncio.run(
+        handle_user_stream_event(
+            event=_algo_fill("binance-generated-id", trade.signal.stop_loss),
+            repository=FakeRepository(trade),
+            exchange=FakeExchange(),
+            move_sl_to_be_after_tp1=True,
+        )
+    )
+
+    assert result.status == "ignored"
+    assert trade.status == "open"
+
+
+def test_algo_fill_for_closed_trade_does_not_close_again() -> None:
+    trade = _trade()
+    trade.status = "closed"
+    trade.closed_reason = "sl"
+    trade.realized_pnl_usdt = Decimal("-2.50")
+
+    result = asyncio.run(
+        handle_user_stream_event(
+            event=_algo_fill(
+                trade.sl_order_id or "",
+                trade.signal.stop_loss,
+                realized_pnl=Decimal("-5"),
+            ),
+            repository=FakeRepository(trade),
+            exchange=FakeExchange(),
+            move_sl_to_be_after_tp1=True,
+        )
+    )
+
+    assert result.status == "ignored"
+    assert trade.closed_reason == "sl"
+    assert trade.realized_pnl_usdt == Decimal("-2.50")
+
+
 def test_tp1_fill_marks_leg_and_can_move_stop_to_break_even() -> None:
     trade = _trade()
     repository = FakeRepository(trade)

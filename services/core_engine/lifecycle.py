@@ -43,7 +43,11 @@ async def handle_user_stream_event(
         trade = _find_open_trade_by_symbol(repository, event.symbol)
         if trade is not None:
             return await handle_liquidation_update(trade=trade, repository=repository)
-    if event.event_type != "ORDER_TRADE_UPDATE" or event.order_status != "FILLED":
+    is_order_fill = (
+        event.event_type == "ORDER_TRADE_UPDATE" and event.order_status == "FILLED"
+    )
+    is_algo_fill = event.event_type == "ALGO_UPDATE" and event.order_status == "FINISHED"
+    if not is_order_fill and not is_algo_fill:
         return LifecycleResult(status="ignored")
     if event.client_order_id is None:
         return LifecycleResult(status="ignored")
@@ -51,6 +55,10 @@ async def handle_user_stream_event(
     leg_match = repository.get_trade_leg_by_client_order_id(event.client_order_id)
     if leg_match is not None:
         trade, leg = leg_match
+        if trade.status == "closed":
+            return LifecycleResult(
+                status="ignored", trade_id=trade.id, leg_index=leg.leg_index
+            )
         if leg.status == "filled":
             return LifecycleResult(
                 status="ignored", trade_id=trade.id, leg_index=leg.leg_index
@@ -63,7 +71,18 @@ async def handle_user_stream_event(
                     await exchange.cancel_algo_order(
                         client_order_id=trade.sl_order_id
                     )
-            pnl = _blended_pnl(trade=trade, remaining_exit_price=None)
+            filled_leg_exit_prices = (
+                {leg.leg_index: event.last_filled_price}
+                if event.last_filled_price is not None
+                and event.last_filled_price > 0
+                else None
+            )
+            pnl = _realized_pnl_for_close(
+                event=event,
+                trade=trade,
+                remaining_exit_price=None,
+                filled_leg_exit_prices=filled_leg_exit_prices,
+            )
             closed = repository.close_trade(
                 trade=trade,
                 closed_reason="all_tp",
@@ -137,8 +156,12 @@ async def handle_user_stream_event(
     trade = repository.get_trade_by_client_order_id(event.client_order_id)
     if trade is None:
         return LifecycleResult(status="ignored")
+    if trade.status == "closed":
+        return LifecycleResult(status="ignored", trade_id=trade.id)
     if event.client_order_id == trade.entry_order_id:
-        return LifecycleResult(status="entry_filled", trade_id=trade.id)
+        return LifecycleResult(
+            status="entry_filled" if is_order_fill else "ignored", trade_id=trade.id
+        )
     if event.client_order_id != trade.sl_order_id:
         return LifecycleResult(status="ignored", trade_id=trade.id)
 
@@ -152,7 +175,11 @@ async def handle_user_stream_event(
     is_break_even = event.client_order_id == client_order_id(
         trade_id=trade.id, purpose="be_sl"
     ) or stop_price == entry
-    pnl = _blended_pnl(trade=trade, remaining_exit_price=stop_price)
+    pnl = _realized_pnl_for_close(
+        event=event,
+        trade=trade,
+        remaining_exit_price=stop_price,
+    )
     reason = "be" if is_break_even else "sl"
     closed = repository.close_trade(
         trade=trade,
@@ -291,7 +318,36 @@ async def _cancel_open_tps(*, trade: Trade, exchange: ExchangeClient) -> None:
                 await exchange.cancel_algo_order(client_order_id=leg.tp_order_id)
 
 
-def _blended_pnl(*, trade: Trade, remaining_exit_price: Decimal | None) -> Decimal:
+def _realized_pnl_for_close(
+    *,
+    event: UserStreamEvent,
+    trade: Trade,
+    remaining_exit_price: Decimal | None,
+    filled_leg_exit_prices: dict[int, Decimal] | None = None,
+) -> Decimal:
+    if event.realized_pnl is not None:
+        return event.realized_pnl
+    if event.event_type == "ALGO_UPDATE":
+        LOGGER.warning(
+            "event_type=algo_fill_pnl status=approximated trade_id=%s "
+            "client_order_id=%s fill_price=%s",
+            trade.id,
+            event.client_order_id,
+            event.last_filled_price,
+        )
+    return _blended_pnl(
+        trade=trade,
+        remaining_exit_price=remaining_exit_price,
+        filled_leg_exit_prices=filled_leg_exit_prices,
+    )
+
+
+def _blended_pnl(
+    *,
+    trade: Trade,
+    remaining_exit_price: Decimal | None,
+    filled_leg_exit_prices: dict[int, Decimal] | None = None,
+) -> Decimal:
     entry = _entry_price(trade)
     side = SignalSide(trade.side)
     total_qty = Decimal(trade.qty)
@@ -300,7 +356,9 @@ def _blended_pnl(*, trade: Trade, remaining_exit_price: Decimal | None) -> Decim
     pnl = Decimal("0")
     for leg in trade.legs:
         if leg.status == "filled":
-            exit_price = Decimal(leg.target_price)
+            exit_price = (filled_leg_exit_prices or {}).get(
+                leg.leg_index, Decimal(leg.target_price)
+            )
         elif remaining_exit_price is not None:
             exit_price = remaining_exit_price
         else:
