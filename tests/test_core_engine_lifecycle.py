@@ -74,7 +74,7 @@ class FakeExchange:
         self.events = events
         self.open_orders: list[ExchangeOrder] = []
 
-    async def cancel_order(self, **values: object) -> None:
+    async def cancel_algo_order(self, **values: object) -> None:
         self.calls.append(("cancel", values))
         if self.events is not None:
             self.events.append("cancel_old_sl")
@@ -93,7 +93,7 @@ class FakeExchange:
         self.open_orders.append(order)
         return order
 
-    async def get_open_orders(self, **values: object) -> list[ExchangeOrder]:
+    async def get_open_algo_orders(self, **values: object) -> list[ExchangeOrder]:
         self.calls.append(("open_orders", values))
         if self.events is not None:
             self.events.append("confirm_new_sl")

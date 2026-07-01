@@ -13,6 +13,7 @@ _PURPOSES = {
     "emergency_close",
 }
 _BINANCE_CLIENT_ID_MAX_LENGTH = 36
+_PURPOSE_TOKENS = {"emergency_close": "emergency"}
 
 
 def client_order_id(
@@ -31,7 +32,8 @@ def client_order_id(
     if leg_index is not None and leg_index <= 0:
         raise ValueError("leg_index must be positive")
 
-    value = f"m7-{trade_id}-{purpose}"
+    purpose_token = _PURPOSE_TOKENS.get(purpose, purpose)
+    value = f"m7-{trade_id}-{purpose_token}"
     if leg_index is not None:
         value = f"{value}-{leg_index}"
     if len(value) > _BINANCE_CLIENT_ID_MAX_LENGTH:

@@ -39,7 +39,7 @@ async def reconcile_open_trades(
                 trade=trade,
             )
             position = await exchange.get_position(symbol=trade.symbol)
-            open_orders = await exchange.get_open_orders(symbol=trade.symbol)
+            open_orders = await exchange.get_open_algo_orders(symbol=trade.symbol)
             open_ids = {order.client_order_id for order in open_orders}
             if position is None and not open_orders:
                 repository.close_trade(

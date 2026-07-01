@@ -60,9 +60,8 @@ async def handle_user_stream_event(
         if trade.legs and len(filled_legs) == len(trade.legs):
             if trade.sl_order_id:
                 with suppress(Exception):
-                    await exchange.cancel_order(
-                        symbol=trade.symbol,
-                        client_order_id=trade.sl_order_id,
+                    await exchange.cancel_algo_order(
+                        client_order_id=trade.sl_order_id
                     )
             pnl = _blended_pnl(trade=trade, remaining_exit_price=None)
             closed = repository.close_trade(
@@ -102,10 +101,7 @@ async def handle_user_stream_event(
                 )
             if old_sl_id and old_sl_id != be_id:
                 try:
-                    await exchange.cancel_order(
-                        symbol=trade.symbol,
-                        client_order_id=old_sl_id,
-                    )
+                    await exchange.cancel_algo_order(client_order_id=old_sl_id)
                 except Exception:
                     LOGGER.warning(
                         "event_type=break_even_stop status=old_stop_cancel_failed "
@@ -195,9 +191,7 @@ async def handle_mark_price_for_model3(
         )
         if trade.sl_order_id:
             with suppress(Exception):
-                await exchange.cancel_order(
-                    symbol=trade.symbol, client_order_id=trade.sl_order_id
-                )
+                await exchange.cancel_algo_order(client_order_id=trade.sl_order_id)
         pnl = Decimal(trade.margin_usdt) * exit_roi / Decimal("100")
         closed = repository.close_trade(
             trade=trade,
@@ -239,7 +233,7 @@ async def _confirm_open_order(
 ) -> bool:
     for attempt in range(len(_BE_RETRY_DELAYS_SEC) + 1):
         try:
-            open_orders = await exchange.get_open_orders(symbol=symbol)
+            open_orders = await exchange.get_open_algo_orders(symbol=symbol)
             if any(
                 order.client_order_id == client_order_id for order in open_orders
             ):
@@ -272,9 +266,7 @@ async def _cancel_open_tps(*, trade: Trade, exchange: ExchangeClient) -> None:
     for leg in trade.legs:
         if leg.status == "open" and leg.tp_order_id:
             with suppress(Exception):
-                await exchange.cancel_order(
-                    symbol=trade.symbol, client_order_id=leg.tp_order_id
-                )
+                await exchange.cancel_algo_order(client_order_id=leg.tp_order_id)
 
 
 def _blended_pnl(*, trade: Trade, remaining_exit_price: Decimal | None) -> Decimal:

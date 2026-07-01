@@ -7,7 +7,7 @@ import pytest
 
 import services.core_engine.orders as orders_module
 from services.core_engine.ids import client_order_id
-from services.core_engine.orders import EntryGuard, place_initial_orders
+from services.core_engine.orders import EntryGuard, _confirm_open_order, place_initial_orders
 from services.core_engine.risk import ExecutionLegPlan, ExecutionPlan
 from shared.exchange.types import ExchangeOrder
 from shared.models import Signal, Trade
@@ -85,6 +85,10 @@ class FakeExchange:
         self.calls.append(("open_orders", values))
         return list(self.open_orders)
 
+    async def get_open_algo_orders(self, **values: object) -> list[ExchangeOrder]:
+        self.calls.append(("open_algo_orders", values))
+        return list(self.open_orders)
+
     async def close_position_market(self, **values: object) -> ExchangeOrder:
         self.calls.append(("close", values))
         if self.fail_emergency_close:
@@ -93,6 +97,10 @@ class FakeExchange:
 
     async def cancel_open_orders(self, **values: object) -> None:
         self.calls.append(("cancel_all", values))
+        self.open_orders.clear()
+
+    async def cancel_all_algo_orders(self, **values: object) -> None:
+        self.calls.append(("cancel_all_algo", values))
         self.open_orders.clear()
 
 
@@ -184,7 +192,7 @@ def test_order_sequence_and_deterministic_ids() -> None:
         "isolated",
         "entry_limit",
         "sl",
-        "open_orders",
+        "open_algo_orders",
         "tp",
     ]
     assert result.status == "opened"
@@ -226,6 +234,22 @@ def test_unconfirmed_sl_emergency_closes_instead_of_opening() -> None:
     assert result.status == "emergency_closed"
     assert result.sl_order_id is None
     assert "close" in [name for name, _ in fake.calls]
+
+
+def test_confirm_open_order_checks_algo_orders_for_matching_client_id() -> None:
+    fake = FakeExchange()
+    fake.open_orders.append(_order("m7-9-sl", "NEW"))
+
+    assert asyncio.run(
+        _confirm_open_order(
+            exchange=fake, symbol="HBARUSDT", client_order_id="m7-9-sl"
+        )
+    )
+    assert not asyncio.run(
+        _confirm_open_order(
+            exchange=fake, symbol="HBARUSDT", client_order_id="m7-9-other"
+        )
+    )
 
 
 def test_confirmed_sl_keeps_trade_open_when_one_tp_leg_fails() -> None:

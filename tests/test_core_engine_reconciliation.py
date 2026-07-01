@@ -52,7 +52,7 @@ class FakeExchange:
             unrealized_pnl=Decimal("1"),
         )
 
-    async def get_open_orders(self, *, symbol: str):
+    async def get_open_algo_orders(self, *, symbol: str):
         del symbol
         return self.orders
 

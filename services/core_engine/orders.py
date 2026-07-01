@@ -195,7 +195,7 @@ async def _confirm_open_order(
 ) -> bool:
     for attempt in range(len(_CONFIRM_RETRY_DELAYS_SEC) + 1):
         try:
-            open_orders = await exchange.get_open_orders(symbol=symbol)
+            open_orders = await exchange.get_open_algo_orders(symbol=symbol)
             if any(
                 order.client_order_id == client_order_id for order in open_orders
             ):
@@ -274,6 +274,15 @@ async def _emergency_close(
         except Exception:
             LOGGER.error(
                 "event_type=emergency_close status=cleanup_failed "
+                "trade_id=%s symbol=%s",
+                trade.id,
+                trade.symbol,
+            )
+        try:
+            await exchange.cancel_all_algo_orders(symbol=trade.symbol)
+        except Exception:
+            LOGGER.error(
+                "event_type=emergency_close status=algo_cleanup_failed "
                 "trade_id=%s symbol=%s",
                 trade.id,
                 trade.symbol,

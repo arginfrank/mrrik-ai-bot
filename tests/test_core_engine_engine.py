@@ -98,8 +98,15 @@ class FakeExchange:
     async def get_open_orders(self, **values: object) -> list[ExchangeOrder]:
         return list(self.open_orders)
 
+    async def get_open_algo_orders(self, **values: object) -> list[ExchangeOrder]:
+        return list(self.open_orders)
+
     async def cancel_open_orders(self, **values: object) -> None:
         self.calls.append("cancel_all")
+        self.open_orders.clear()
+
+    async def cancel_all_algo_orders(self, **values: object) -> None:
+        self.calls.append("cancel_all_algo")
         self.open_orders.clear()
 
     async def close_position_market(self, **values: object) -> ExchangeOrder:

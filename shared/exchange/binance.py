@@ -158,15 +158,19 @@ class BinanceFuturesClient:
         client_order_id: str,
         close_position: bool,
     ) -> ExchangeOrder:
-        raw = await self._call(
-            "new_order",
-            symbol=symbol,
-            side=side,
-            type="STOP_MARKET",
-            stopPrice=_decimal_string(stop_price),
-            closePosition=close_position,
-            newClientOrderId=client_order_id,
-            workingType="MARK_PRICE",
+        raw = await self._signed_request(
+            "POST",
+            "/fapi/v1/algoOrder",
+            {
+                "algoType": "CONDITIONAL",
+                "symbol": symbol,
+                "side": side,
+                "type": "STOP_MARKET",
+                "triggerPrice": _decimal_string(stop_price),
+                "workingType": "MARK_PRICE",
+                "closePosition": "true",
+                "clientAlgoId": client_order_id,
+            },
         )
         return parse_exchange_order(raw)
 
@@ -180,16 +184,20 @@ class BinanceFuturesClient:
         client_order_id: str,
         reduce_only: bool,
     ) -> ExchangeOrder:
-        raw = await self._call(
-            "new_order",
-            symbol=symbol,
-            side=side,
-            type="TAKE_PROFIT_MARKET",
-            quantity=_decimal_string(qty),
-            stopPrice=_decimal_string(stop_price),
-            reduceOnly=reduce_only,
-            newClientOrderId=client_order_id,
-            workingType="MARK_PRICE",
+        raw = await self._signed_request(
+            "POST",
+            "/fapi/v1/algoOrder",
+            {
+                "algoType": "CONDITIONAL",
+                "symbol": symbol,
+                "side": side,
+                "type": "TAKE_PROFIT_MARKET",
+                "triggerPrice": _decimal_string(stop_price),
+                "quantity": _decimal_string(qty),
+                "reduceOnly": "true",
+                "workingType": "MARK_PRICE",
+                "clientAlgoId": client_order_id,
+            },
         )
         return parse_exchange_order(raw)
 
@@ -200,6 +208,20 @@ class BinanceFuturesClient:
 
     async def cancel_open_orders(self, *, symbol: str) -> None:
         await self._call("cancel_open_orders", symbol=symbol)
+
+    async def cancel_algo_order(self, *, client_order_id: str) -> None:
+        await self._signed_request(
+            "DELETE",
+            "/fapi/v1/algoOrder",
+            {"clientAlgoId": client_order_id},
+        )
+
+    async def cancel_all_algo_orders(self, *, symbol: str) -> None:
+        await self._signed_request(
+            "DELETE",
+            "/fapi/v1/algoOpenOrders",
+            {"symbol": symbol},
+        )
 
     async def close_position_market(
         self,
@@ -250,7 +272,17 @@ class BinanceFuturesClient:
         self, *, symbol: str | None = None
     ) -> list[ExchangeOrder]:
         values = await self._call(
-            "get_open_orders", **({"symbol": symbol} if symbol is not None else {})
+            "get_orders", **({"symbol": symbol} if symbol is not None else {})
+        )
+        return [parse_exchange_order(raw) for raw in values]
+
+    async def get_open_algo_orders(
+        self, *, symbol: str | None = None
+    ) -> list[ExchangeOrder]:
+        values = await self._signed_request(
+            "GET",
+            "/fapi/v1/openAlgoOrders",
+            {"symbol": symbol},
         )
         return [parse_exchange_order(raw) for raw in values]
 
@@ -296,6 +328,14 @@ class BinanceFuturesClient:
         function = getattr(self._rest, method)
         return await asyncio.to_thread(function, **kwargs)
 
+    async def _signed_request(
+        self, http_method: str, url_path: str, params: dict[str, Any]
+    ) -> Any:
+        payload = {key: value for key, value in params.items() if value is not None}
+        return await asyncio.to_thread(
+            self._rest.sign_request, http_method, url_path, payload
+        )
+
     async def _renew_listen_key(self, listen_key: str) -> None:
         while True:
             await asyncio.sleep(30 * 60)
@@ -319,15 +359,25 @@ class BinanceFuturesClient:
 def parse_exchange_order(raw: dict[str, Any]) -> ExchangeOrder:
     """Parse a Binance order response into ExchangeOrder."""
     return ExchangeOrder(
-        exchange_order_id=str(raw.get("orderId", raw.get("i", ""))),
-        client_order_id=str(raw.get("clientOrderId", raw.get("c", ""))),
+        exchange_order_id=str(
+            raw.get("orderId", raw.get("algoId", raw.get("i", "")))
+        ),
+        client_order_id=str(
+            raw.get("clientOrderId", raw.get("clientAlgoId", raw.get("c", "")))
+        ),
         symbol=str(raw.get("symbol", raw.get("s", ""))),
         side=cast(OrderSide, str(raw.get("side", raw.get("S", "BUY")))),
-        order_type=cast(OrderType, str(raw.get("type", raw.get("o", "MARKET")))),
-        status=cast(OrderStatus, str(raw.get("status", raw.get("X", "NEW")))),
+        order_type=cast(
+            OrderType, str(raw.get("type", raw.get("orderType", raw.get("o", "MARKET"))))
+        ),
+        status=cast(
+            OrderStatus, str(raw.get("status", raw.get("algoStatus", raw.get("X", "NEW"))))
+        ),
         price=_optional_decimal(raw.get("price", raw.get("p"))),
-        stop_price=_optional_decimal(raw.get("stopPrice", raw.get("sp"))),
-        qty=_optional_decimal(raw.get("origQty", raw.get("q"))),
+        stop_price=_optional_decimal(
+            raw.get("stopPrice", raw.get("triggerPrice", raw.get("sp")))
+        ),
+        qty=_optional_decimal(raw.get("origQty", raw.get("quantity", raw.get("q")))),
         reduce_only=_as_bool(raw.get("reduceOnly", raw.get("R", False))),
         close_position=_as_bool(raw.get("closePosition", raw.get("cp", False))),
         raw=dict(raw),

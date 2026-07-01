@@ -88,7 +88,7 @@ backup:
   keep_last: 7
 
 testnet:
-  enabled: false
+  enabled: true
   require_explicit_env: true
 
 live_canary:
