@@ -90,3 +90,12 @@ def test_migration_created_processed_event_primary_key(database_engine: Engine) 
     primary_key = inspect(database_engine).get_pk_constraint("processed_events")
 
     assert primary_key["constrained_columns"] == ["event_id"]
+
+
+def test_migration_added_hedge_enabled(database_engine: Engine) -> None:
+    columns = {
+        column["name"]: column
+        for column in inspect(database_engine).get_columns("exchange_credentials")
+    }
+
+    assert columns["hedge_enabled"]["nullable"] is False

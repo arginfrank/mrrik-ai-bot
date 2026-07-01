@@ -39,6 +39,21 @@ _TEXTS: dict[str, dict[str, str]] = {
             "API credentials received securely for verification. They are not marked valid "
             "or tradable yet."
         ),
+        "api_credentials_access_invalid": (
+            "Your API key is invalid or lacks Binance Futures permission. Check the key "
+            "and permissions, then resubmit both credentials."
+        ),
+        "api_credentials_hedge_blocked": (
+            "Binance could not switch this account to Hedge Mode because it has open "
+            "positions or orders. Close everything, or enable Hedge Mode yourself in "
+            "Binance settings, then resubmit your credentials."
+        ),
+        "api_credentials_onboarding_succeeded": (
+            "Your Binance Futures API is validated and Hedge Mode is enabled. Onboarding "
+            "succeeded.\n\nUse an account that you do NOT trade on manually. Any manual "
+            "trade on a bot-managed symbol is at your own risk and may corrupt the bot's "
+            "tracking."
+        ),
         "api_credentials_invalid_format": (
             "Invalid format. Send exactly two values: API key on the first line and API "
             "secret on the second line, or use api_key: and api_secret: labels."

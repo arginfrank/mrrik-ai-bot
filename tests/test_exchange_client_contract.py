@@ -9,6 +9,7 @@ import websockets
 
 from shared.exchange.binance import (
     BinanceFuturesClient,
+    HedgeModeBlockedError,
     parse_exchange_order,
     parse_user_stream_event,
     to_binance_order_side,
@@ -51,6 +52,12 @@ class EmptyWebSocket:
         raise StopAsyncIteration
 
 
+class BinanceApiError(Exception):
+    def __init__(self, error_code: int) -> None:
+        self.error_code = error_code
+        super().__init__(str(error_code))
+
+
 def test_fake_client_exposes_exchange_contract_methods() -> None:
     fake = FakeExchangeClient()
     for name in (
@@ -60,6 +67,76 @@ def test_fake_client_exposes_exchange_contract_methods() -> None:
         "get_symbol_filters",
     ):
         assert callable(getattr(fake, name))
+
+
+def test_validate_access_uses_signed_futures_balance_endpoint(monkeypatch) -> None:
+    client = BinanceFuturesClient(api_key="", api_secret="")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    async def signed_request(
+        http_method: str, url_path: str, params: dict[str, object]
+    ) -> list[object]:
+        calls.append((http_method, url_path, params))
+        return []
+
+    monkeypatch.setattr(client, "_signed_request", signed_request)
+
+    assert asyncio.run(client.validate_access()) is True
+    assert calls == [("GET", "/fapi/v2/balance", {})]
+
+
+def test_get_hedge_mode_uses_position_side_endpoint(monkeypatch) -> None:
+    client = BinanceFuturesClient(api_key="", api_secret="")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    async def signed_request(
+        http_method: str, url_path: str, params: dict[str, object]
+    ) -> dict[str, object]:
+        calls.append((http_method, url_path, params))
+        return {"dualSidePosition": True}
+
+    monkeypatch.setattr(client, "_signed_request", signed_request)
+
+    assert asyncio.run(client.get_hedge_mode()) is True
+    assert calls == [("GET", "/fapi/v1/positionSide/dual", {})]
+
+
+def test_enable_hedge_mode_posts_true_and_accepts_already_enabled(monkeypatch) -> None:
+    client = BinanceFuturesClient(api_key="", api_secret="")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    async def signed_request(
+        http_method: str, url_path: str, params: dict[str, object]
+    ) -> None:
+        calls.append((http_method, url_path, params))
+        if len(calls) == 2:
+            raise BinanceApiError(-4059)
+
+    monkeypatch.setattr(client, "_signed_request", signed_request)
+
+    asyncio.run(client.enable_hedge_mode())
+    asyncio.run(client.enable_hedge_mode())
+    assert calls == [
+        ("POST", "/fapi/v1/positionSide/dual", {"dualSidePosition": "true"}),
+        ("POST", "/fapi/v1/positionSide/dual", {"dualSidePosition": "true"}),
+    ]
+
+
+def test_enable_hedge_mode_raises_distinct_error_when_account_is_not_flat(
+    monkeypatch,
+) -> None:
+    client = BinanceFuturesClient(api_key="", api_secret="")
+
+    async def signed_request(
+        http_method: str, url_path: str, params: dict[str, object]
+    ) -> None:
+        del http_method, url_path, params
+        raise BinanceApiError(-4068)
+
+    monkeypatch.setattr(client, "_signed_request", signed_request)
+
+    with pytest.raises(HedgeModeBlockedError):
+        asyncio.run(client.enable_hedge_mode())
 
 
 def test_parse_exchange_order_uses_decimal_strings() -> None:

@@ -54,6 +54,7 @@ from services.telegram_bot.states import (
     SettingsStates,
     SubscribeStates,
 )
+from shared.exchange.binance import BinanceFuturesClient, HedgeModeBlockedError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class TelegramBotConfig:
     wallet_polygon: str
     fernet_key: str
     admin_telegram_ids: tuple[int, ...]
+    binance_testnet: bool = False
 
 
 def config_from_app_config(app_config: object) -> TelegramBotConfig:
@@ -96,6 +98,7 @@ def config_from_app_config(app_config: object) -> TelegramBotConfig:
         wallet_polygon=_secret_value(getattr(env_config, "wallet_polygon", None)),
         fernet_key=_secret_value(getattr(env_config, "fernet_key", None)),
         admin_telegram_ids=admin_ids,
+        binance_testnet=bool(getattr(file_config.testnet, "enabled", False)),
     )
 
 
@@ -574,9 +577,60 @@ async def handle_api_credentials(
             api_key_enc=api_key_enc,
             api_secret_enc=api_secret_enc,
         )
+
+    client = BinanceFuturesClient(
+        api_key=parsed.api_key,
+        api_secret=parsed.api_secret,
+        testnet=config.binance_testnet,
+    )
+    if not await client.validate_access():
+        _set_credential_validation(
+            repository_factory=repository_factory,
+            user=user,
+            is_valid=False,
+            scope_verified=False,
+            hedge_enabled=False,
+        )
+        await message.answer(t("api_credentials_access_invalid"))
+        return
+
+    try:
+        hedge_enabled = await client.get_hedge_mode()
+        if not hedge_enabled:
+            await client.enable_hedge_mode()
+            hedge_enabled = True
+    except HedgeModeBlockedError:
+        _set_credential_validation(
+            repository_factory=repository_factory,
+            user=user,
+            is_valid=True,
+            scope_verified=False,
+            hedge_enabled=False,
+        )
+        await message.answer(t("api_credentials_hedge_blocked"))
+        return
+    except Exception:
+        LOGGER.exception("Binance Hedge Mode validation failed for user_id=%s", user.id)
+        _set_credential_validation(
+            repository_factory=repository_factory,
+            user=user,
+            is_valid=False,
+            scope_verified=False,
+            hedge_enabled=False,
+        )
+        await message.answer(t("api_credentials_access_invalid"))
+        return
+
+    _set_credential_validation(
+        repository_factory=repository_factory,
+        user=user,
+        is_valid=True,
+        scope_verified=True,
+        hedge_enabled=hedge_enabled,
+    )
     await state.clear()
     await message.answer(
-        t("api_credentials_received"),
+        t("api_credentials_onboarding_succeeded"),
         reply_markup=back_to_main_keyboard(),
     )
 
@@ -686,6 +740,23 @@ def _repository_context(factory: Any) -> Iterator[Any]:
             yield repository
     else:
         yield resource
+
+
+def _set_credential_validation(
+    *,
+    repository_factory: Any,
+    user: Any,
+    is_valid: bool,
+    scope_verified: bool,
+    hedge_enabled: bool,
+) -> None:
+    with _repository_context(repository_factory) as repository:
+        repository.set_credential_validation(
+            user=user,
+            is_valid=is_valid,
+            scope_verified=scope_verified,
+            hedge_enabled=hedge_enabled,
+        )
 
 
 def _identity(event: Any) -> tuple[int, str | None]:

@@ -117,6 +117,16 @@ def test_telegram_bot_repository_m5_lifecycle() -> None:
         assert same_credential.api_key_enc == b"encrypted-key-2"
         assert same_credential.scope_verified is False
         assert same_credential.is_valid is False
+        assert same_credential.hedge_enabled is False
+        repository.set_credential_validation(
+            user=user,
+            is_valid=True,
+            scope_verified=True,
+            hedge_enabled=True,
+        )
+        assert same_credential.scope_verified is True
+        assert same_credential.is_valid is True
+        assert same_credential.hedge_enabled is True
 
         now = datetime.now(UTC)
         near = Subscription(

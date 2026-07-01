@@ -80,6 +80,13 @@ def test_processed_event_id_is_the_primary_key() -> None:
     assert tuple(column.name for column in primary_key.columns) == ("event_id",)
 
 
+def test_exchange_credentials_track_hedge_mode_validation() -> None:
+    column = Base.metadata.tables["exchange_credentials"].c.hedge_enabled
+
+    assert column.nullable is False
+    assert str(column.server_default.arg) == "false"
+
+
 def test_risk_model_check_constraint_allows_only_supported_models() -> None:
     constraints = Base.metadata.tables["user_settings"].constraints
     check_sql = {

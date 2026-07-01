@@ -52,6 +52,7 @@ def test_repository_real_trade_lifecycle() -> None:
                     api_secret_enc=b"encrypted-secret",
                     scope_verified=True,
                     is_valid=True,
+                    hedge_enabled=True,
                 ),
             ]
         )

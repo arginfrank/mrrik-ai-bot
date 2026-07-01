@@ -144,3 +144,19 @@ def test_persistent_signal_miss_is_warned_and_left_unacked(
     assert calls == 2
     assert redis_client.acked == []
     assert "reason=signal_not_found acknowledged=false" in caplog.text
+
+
+def test_runtime_exchange_factory_refuses_credentials_without_hedge_mode() -> None:
+    credential = SimpleNamespace(
+        api_key_enc=b"unused",
+        api_secret_enc=b"unused",
+        is_valid=True,
+        scope_verified=True,
+        hedge_enabled=False,
+    )
+
+    with pytest.raises(ValueError, match="valid exchange credentials"):
+        core_main._RuntimeExchangeFactory("unused").create_for_credential(
+            credential=credential,
+            user_id=1,
+        )

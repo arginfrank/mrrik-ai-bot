@@ -34,6 +34,10 @@ _TESTNET_WS_URL = "wss://stream.binancefuture.com"
 _API_RESTRICTIONS_URL = "https://api.binance.com/sapi/v1/account/apiRestrictions"
 
 
+class HedgeModeBlockedError(RuntimeError):
+    """Raised when open Binance orders or positions prevent enabling Hedge Mode."""
+
+
 class BinanceFuturesClient:
     """Async facade over the official synchronous USD-M Futures connector."""
 
@@ -59,6 +63,39 @@ class BinanceFuturesClient:
         except Exception:
             return False
         return True
+
+    async def validate_access(self) -> bool:
+        """Return whether the credentials can reach a signed Futures endpoint."""
+        try:
+            await self._signed_request("GET", "/fapi/v2/balance", {})
+        except Exception:
+            return False
+        return True
+
+    async def get_hedge_mode(self) -> bool:
+        raw = await self._signed_request(
+            "GET",
+            "/fapi/v1/positionSide/dual",
+            {},
+        )
+        return _as_bool(raw.get("dualSidePosition", False))
+
+    async def enable_hedge_mode(self) -> None:
+        try:
+            await self._signed_request(
+                "POST",
+                "/fapi/v1/positionSide/dual",
+                {"dualSidePosition": "true"},
+            )
+        except Exception as error:
+            error_code = getattr(error, "error_code", None)
+            if error_code == -4059:
+                return
+            if error_code == -4068:
+                raise HedgeModeBlockedError(
+                    "open orders or positions prevent enabling Hedge Mode"
+                ) from error
+            raise
 
     async def verify_withdrawals_disabled(self) -> bool:
         """Verify Binance's key restriction flag; unknown is always unsafe."""

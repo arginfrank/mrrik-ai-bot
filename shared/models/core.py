@@ -191,6 +191,11 @@ class ExchangeCredential(Base):
         nullable=False,
         server_default=false(),
     )
+    hedge_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=false(),
+    )
     is_valid: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

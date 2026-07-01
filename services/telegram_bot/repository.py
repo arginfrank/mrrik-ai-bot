@@ -279,6 +279,7 @@ class TelegramBotRepository:
                 api_key_enc=api_key_enc,
                 api_secret_enc=api_secret_enc,
                 scope_verified=False,
+                hedge_enabled=False,
                 is_valid=False,
             )
             self._session.add(credential)
@@ -286,7 +287,29 @@ class TelegramBotRepository:
             credential.api_key_enc = api_key_enc
             credential.api_secret_enc = api_secret_enc
             credential.scope_verified = False
+            credential.hedge_enabled = False
             credential.is_valid = False
+        self._session.flush()
+        return credential
+
+    def set_credential_validation(
+        self,
+        *,
+        user: User,
+        is_valid: bool,
+        scope_verified: bool,
+        hedge_enabled: bool,
+    ) -> ExchangeCredential:
+        statement = select(ExchangeCredential).where(
+            ExchangeCredential.user_id == user.id,
+            ExchangeCredential.exchange == "binance",
+        )
+        credential = self._session.scalar(statement)
+        if credential is None:
+            raise ValueError("Binance credentials have not been stored")
+        credential.is_valid = is_valid
+        credential.scope_verified = scope_verified
+        credential.hedge_enabled = hedge_enabled
         self._session.flush()
         return credential
 

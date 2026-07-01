@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from cryptography.fernet import Fernet
+import pytest
 
+from services.telegram_bot import handlers as telegram_handlers
 from services.telegram_bot.handlers import (
     TelegramBotConfig,
     handle_api_credentials,
@@ -22,6 +24,7 @@ from services.telegram_bot.handlers import (
     handle_txid,
 )
 from services.telegram_bot.states import SubscribeStates
+from shared.exchange.binance import HedgeModeBlockedError
 from shared.models import Payment, Plan, Subscription, User, UserSetting
 
 
@@ -119,6 +122,11 @@ class FakeRepository:
         self.demo_reset_user_ids: list[int] = []
         self.demo_account = SimpleNamespace(user_id=self.user.id)
         self.credentials: tuple[bytes, bytes] | None = None
+        self.credential = SimpleNamespace(
+            scope_verified=False,
+            is_valid=False,
+            hedge_enabled=False,
+        )
         self.payment: Payment | None = None
 
     def get_or_create_user(self, **kwargs: Any) -> User:
@@ -183,7 +191,16 @@ class FakeRepository:
         api_secret_enc: bytes,
     ) -> object:
         self.credentials = (api_key_enc, api_secret_enc)
-        return SimpleNamespace(scope_verified=False, is_valid=False)
+        self.credential.scope_verified = False
+        self.credential.is_valid = False
+        self.credential.hedge_enabled = False
+        return self.credential
+
+    def set_credential_validation(self, **values: Any) -> object:
+        del values["user"]
+        for name, value in values.items():
+            setattr(self.credential, name, value)
+        return self.credential
 
     def update_risk_model(self, *, user: User, risk_model: int) -> UserSetting:
         self.settings.risk_model = risk_model
@@ -266,10 +283,51 @@ def test_plan_network_and_txid_submission_flow() -> None:
     assert "awaiting review" in message.answers[0]["text"].lower()
 
 
-def test_api_credentials_are_deleted_encrypted_and_stored() -> None:
+class FakeOnboardingExchange:
+    def __init__(
+        self,
+        *,
+        access: bool = True,
+        hedge_enabled: bool = True,
+        hedge_blocked: bool = False,
+    ) -> None:
+        self.access = access
+        self.hedge_enabled = hedge_enabled
+        self.hedge_blocked = hedge_blocked
+        self.enable_calls = 0
+
+    async def validate_access(self) -> bool:
+        return self.access
+
+    async def get_hedge_mode(self) -> bool:
+        return self.hedge_enabled
+
+    async def enable_hedge_mode(self) -> None:
+        self.enable_calls += 1
+        if self.hedge_blocked:
+            raise HedgeModeBlockedError("account is not flat")
+        self.hedge_enabled = True
+
+
+def _install_exchange(
+    monkeypatch: pytest.MonkeyPatch,
+    exchange: FakeOnboardingExchange,
+) -> list[dict[str, object]]:
+    constructor_calls: list[dict[str, object]] = []
+
+    def create_exchange(**kwargs: object) -> FakeOnboardingExchange:
+        constructor_calls.append(kwargs)
+        return exchange
+
+    monkeypatch.setattr(telegram_handlers, "BinanceFuturesClient", create_exchange)
+    return constructor_calls
+
+
+def test_api_credentials_valid_and_already_hedge_are_accepted(monkeypatch) -> None:
     repository = FakeRepository()
     state = FakeState()
     message = FakeMessage("api-key\napi-secret")
+    calls = _install_exchange(monkeypatch, FakeOnboardingExchange())
 
     asyncio.run(
         handle_api_credentials(
@@ -284,7 +342,83 @@ def test_api_credentials_are_deleted_encrypted_and_stored() -> None:
     assert repository.credentials is not None
     assert b"api-key" not in repository.credentials[0]
     assert b"api-secret" not in repository.credentials[1]
-    assert "received" in message.answers[0]["text"].lower()
+    assert repository.credential.is_valid is True
+    assert repository.credential.scope_verified is True
+    assert repository.credential.hedge_enabled is True
+    assert calls == [
+        {"api_key": "api-key", "api_secret": "api-secret", "testnet": False}
+    ]
+    assert "onboarding succeeded" in message.answers[0]["text"].lower()
+    assert "do not trade on manually" in message.answers[0]["text"].lower()
+    assert state.cleared is True
+
+
+def test_api_credentials_invalid_access_are_rejected(monkeypatch) -> None:
+    repository = FakeRepository()
+    state = FakeState()
+    message = FakeMessage("api-key\napi-secret")
+    _install_exchange(monkeypatch, FakeOnboardingExchange(access=False))
+
+    asyncio.run(
+        handle_api_credentials(
+            message=message,
+            state=state,
+            repository_factory=lambda: repository,
+            config=_config(),
+        )
+    )
+
+    assert repository.credential.is_valid is False
+    assert repository.credential.scope_verified is False
+    assert repository.credential.hedge_enabled is False
+    assert "invalid" in message.answers[0]["text"].lower()
+    assert "futures permission" in message.answers[0]["text"].lower()
+    assert state.cleared is False
+
+
+def test_api_credentials_enable_hedge_mode_and_are_accepted(monkeypatch) -> None:
+    repository = FakeRepository()
+    exchange = FakeOnboardingExchange(hedge_enabled=False)
+    _install_exchange(monkeypatch, exchange)
+    message = FakeMessage("api-key\napi-secret")
+
+    asyncio.run(
+        handle_api_credentials(
+            message=message,
+            state=FakeState(),
+            repository_factory=lambda: repository,
+            config=_config(),
+        )
+    )
+
+    assert exchange.enable_calls == 1
+    assert repository.credential.is_valid is True
+    assert repository.credential.scope_verified is True
+    assert repository.credential.hedge_enabled is True
+
+
+def test_api_credentials_hedge_mode_blocked_requires_flat_account(monkeypatch) -> None:
+    repository = FakeRepository()
+    exchange = FakeOnboardingExchange(hedge_enabled=False, hedge_blocked=True)
+    _install_exchange(monkeypatch, exchange)
+    state = FakeState()
+    message = FakeMessage("api-key\napi-secret")
+
+    asyncio.run(
+        handle_api_credentials(
+            message=message,
+            state=state,
+            repository_factory=lambda: repository,
+            config=_config(),
+        )
+    )
+
+    assert repository.credential.is_valid is True
+    assert repository.credential.scope_verified is False
+    assert repository.credential.hedge_enabled is False
+    assert "open positions or orders" in message.answers[0]["text"].lower()
+    assert "close everything" in message.answers[0]["text"].lower()
+    assert state.cleared is False
 
 
 def test_invalid_api_credentials_are_deleted_and_rejected() -> None:

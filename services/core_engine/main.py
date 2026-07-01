@@ -62,7 +62,12 @@ class _RuntimeExchangeFactory:
         self, *, credential: Any, user_id: int
     ) -> BinanceFuturesClient:
         del user_id
-        if credential is None or not credential.is_valid or not credential.scope_verified:
+        if (
+            credential is None
+            or not credential.is_valid
+            or not credential.scope_verified
+            or not credential.hedge_enabled
+        ):
             raise ValueError("valid exchange credentials are required")
         return BinanceFuturesClient(
             api_key=decrypt_secret(credential.api_key_enc, self._fernet_key),
@@ -301,7 +306,12 @@ def _active_credentials(
                     users[user.id] = user
         for user in users.values():
             credential = repository.get_exchange_credentials(user.id)
-            if credential is None or not credential.is_valid or not credential.scope_verified:
+            if (
+                credential is None
+                or not credential.is_valid
+                or not credential.scope_verified
+                or not credential.hedge_enabled
+            ):
                 continue
             try:
                 yield (

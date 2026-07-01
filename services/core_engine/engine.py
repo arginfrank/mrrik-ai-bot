@@ -162,7 +162,11 @@ async def handle_signal_created(
             )
             skipped += 1
             continue
-        if not credentials.is_valid or not credentials.scope_verified:
+        if (
+            not credentials.is_valid
+            or not credentials.scope_verified
+            or not credentials.hedge_enabled
+        ):
             await _publish_skip(
                 publisher=publisher,
                 user=user,

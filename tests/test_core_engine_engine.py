@@ -175,6 +175,7 @@ class FakeRepository:
             api_secret_enc=encrypt_secret("secret", fernet_key),
             is_valid=True,
             scope_verified=True,
+            hedge_enabled=True,
         )
         self.open_count = 0
         self.duplicate = False
@@ -430,6 +431,13 @@ def test_invalid_scope_withdrawal_and_margin_prechecks_skip() -> None:
     key = Fernet.generate_key().decode()
     repository = FakeRepository(key)
     repository.credentials.scope_verified = False
+    result, publisher = _handle(repository, FakeExchange(), key)
+    assert result.skipped_count == 1
+    assert publisher.events[0][2]["reason"] == "credentials not valid"
+
+    key = Fernet.generate_key().decode()
+    repository = FakeRepository(key)
+    repository.credentials.hedge_enabled = False
     result, publisher = _handle(repository, FakeExchange(), key)
     assert result.skipped_count == 1
     assert publisher.events[0][2]["reason"] == "credentials not valid"
