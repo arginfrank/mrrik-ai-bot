@@ -74,6 +74,10 @@ class ExchangeClient(Protocol):
 
     async def cancel_open_orders(self, *, symbol: str) -> None: ...
 
+    async def cancel_algo_order(self, *, client_order_id: str) -> None: ...
+
+    async def cancel_all_algo_orders(self, *, symbol: str) -> None: ...
+
     async def close_position_market(
         self,
         *,
@@ -86,6 +90,10 @@ class ExchangeClient(Protocol):
     async def get_position(self, *, symbol: str) -> PositionSnapshot | None: ...
 
     async def get_open_orders(
+        self, *, symbol: str | None = None
+    ) -> list[ExchangeOrder]: ...
+
+    async def get_open_algo_orders(
         self, *, symbol: str | None = None
     ) -> list[ExchangeOrder]: ...
 
