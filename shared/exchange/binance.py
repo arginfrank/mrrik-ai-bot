@@ -397,7 +397,7 @@ def parse_exchange_order(raw: dict[str, Any]) -> ExchangeOrder:
 
 
 def parse_user_stream_event(raw: dict[str, Any]) -> UserStreamEvent | None:
-    """Parse ORDER_TRADE_UPDATE / account events into a normalized user event."""
+    """Parse order, algo-order, and account events into a normalized user event."""
     event_type = raw.get("e")
     if event_type == "ORDER_TRADE_UPDATE":
         order = raw.get("o")
@@ -414,6 +414,25 @@ def parse_user_stream_event(raw: dict[str, Any]) -> UserStreamEvent | None:
             cumulative_filled_qty=_optional_decimal(order.get("z")),
             last_filled_price=_optional_decimal(order.get("L")),
             realized_pnl=_optional_decimal(order.get("rp")),
+            raw=dict(raw),
+        )
+    if event_type == "ALGO_UPDATE":
+        algo_order = raw.get("o")
+        if not isinstance(algo_order, dict):
+            algo_order = raw.get("ao")
+        if not isinstance(algo_order, dict):
+            dict_children = [value for value in raw.values() if isinstance(value, dict)]
+            if len(dict_children) != 1:
+                return None
+            algo_order = dict_children[0]
+        return UserStreamEvent(
+            event_type="ALGO_UPDATE",
+            symbol=_optional_string(algo_order.get("s")),
+            client_order_id=_optional_string(algo_order.get("caid")),
+            order_status=_optional_string(algo_order.get("X")),
+            last_filled_qty=_optional_decimal(algo_order.get("aq")),
+            last_filled_price=_optional_decimal(algo_order.get("ap")),
+            realized_pnl=_optional_decimal(algo_order.get("rp")),
             raw=dict(raw),
         )
     if event_type in {"ACCOUNT_UPDATE", "MARGIN_CALL", "ACCOUNT_CONFIG_UPDATE"}:

@@ -376,6 +376,46 @@ def test_parse_user_stream_order_fill() -> None:
     assert event.last_filled_price == Decimal("0.07186")
 
 
+def test_parse_user_stream_algo_fill() -> None:
+    raw = {
+        "e": "ALGO_UPDATE",
+        "o": {
+            "s": "HBARUSDT",
+            "caid": "mrrik-1-sl",
+            "X": "FINISHED",
+            "ap": "0.07077",
+            "aq": "100",
+            "rp": "-4.00",
+            "ps": "LONG",
+        },
+    }
+
+    event = parse_user_stream_event(raw)
+
+    assert event is not None
+    assert event.event_type == "ALGO_UPDATE"
+    assert event.symbol == "HBARUSDT"
+    assert event.client_order_id == "mrrik-1-sl"
+    assert event.order_status == "FINISHED"
+    assert event.last_filled_price == Decimal("0.07077")
+    assert event.last_filled_qty == Decimal("100")
+    assert event.realized_pnl == Decimal("-4.00")
+    assert event.raw == raw
+
+
+def test_parse_user_stream_algo_fill_supports_alternate_inner_key() -> None:
+    event = parse_user_stream_event(
+        {
+            "e": "ALGO_UPDATE",
+            "ao": {"s": "HBARUSDT", "caid": "mrrik-1-sl", "X": "FINISHED"},
+        }
+    )
+
+    assert event is not None
+    assert event.client_order_id == "mrrik-1-sl"
+    assert event.order_status == "FINISHED"
+
+
 def test_order_side_mapping() -> None:
     assert to_binance_order_side(trade_side="LONG", action="open") == "BUY"
     assert to_binance_order_side(trade_side="LONG", action="close") == "SELL"
