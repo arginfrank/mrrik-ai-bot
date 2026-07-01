@@ -10,6 +10,7 @@ from shared.exchange.binance import (
     parse_exchange_order,
     parse_user_stream_event,
     to_binance_order_side,
+    to_binance_position_side,
 )
 from shared.exchange.types import ExchangeOrder, SymbolFilters
 
@@ -106,7 +107,7 @@ def test_parse_exchange_order_supports_algo_response_fields() -> None:
     assert order.close_position is False
 
 
-def test_stop_market_uses_algo_endpoint_with_quantity_and_reduce_only(
+def test_stop_market_uses_algo_endpoint_with_position_side(
     monkeypatch,
 ) -> None:
     client = BinanceFuturesClient(api_key="", api_secret="")
@@ -123,6 +124,7 @@ def test_stop_market_uses_algo_endpoint_with_quantity_and_reduce_only(
         client.place_stop_market(
             symbol="HBARUSDT",
             side="SELL",
+            position_side="LONG",
             qty=Decimal("100"),
             stop_price=Decimal("0.07077"),
             client_order_id="m7-9-sl",
@@ -137,16 +139,17 @@ def test_stop_market_uses_algo_endpoint_with_quantity_and_reduce_only(
                 "algoType": "CONDITIONAL",
                 "symbol": "HBARUSDT",
                 "side": "SELL",
+                "positionSide": "LONG",
                 "type": "STOP_MARKET",
                 "triggerPrice": "0.07077",
                 "quantity": "100",
-                "reduceOnly": "true",
                 "workingType": "MARK_PRICE",
                 "clientAlgoId": "m7-9-sl",
             },
         )
     ]
     assert "closePosition" not in calls[0][2]
+    assert "reduceOnly" not in calls[0][2]
     assert order.client_order_id == "m7-9-sl"
 
 
@@ -167,10 +170,10 @@ def test_take_profit_market_uses_algo_endpoint_without_close_position(
         client.place_take_profit_market(
             symbol="HBARUSDT",
             side="SELL",
+            position_side="LONG",
             qty=Decimal("50"),
             stop_price=Decimal("0.07186"),
             client_order_id="m7-9-tp-1",
-            reduce_only=True,
         )
     )
 
@@ -181,15 +184,125 @@ def test_take_profit_market_uses_algo_endpoint_without_close_position(
             "algoType": "CONDITIONAL",
             "symbol": "HBARUSDT",
             "side": "SELL",
+            "positionSide": "LONG",
             "type": "TAKE_PROFIT_MARKET",
             "triggerPrice": "0.07186",
             "quantity": "50",
-            "reduceOnly": "true",
             "workingType": "MARK_PRICE",
             "clientAlgoId": "m7-9-tp-1",
         },
     )
     assert "closePosition" not in calls[0][2]
+    assert "reduceOnly" not in calls[0][2]
+
+
+def test_entry_orders_include_position_side(monkeypatch) -> None:
+    client = BinanceFuturesClient(api_key="", api_secret="")
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def call(method: str, **kwargs: object) -> dict[str, object]:
+        calls.append((method, kwargs))
+        return dict(kwargs, orderId=1, status="NEW")
+
+    monkeypatch.setattr(client, "_call", call)
+    asyncio.run(
+        client.place_entry_market(
+            symbol="HBARUSDT",
+            side="BUY",
+            position_side="LONG",
+            qty=Decimal("100"),
+            client_order_id="m7-9-entry-market",
+        )
+    )
+    asyncio.run(
+        client.place_entry_limit(
+            symbol="HBARUSDT",
+            side="SELL",
+            position_side="SHORT",
+            qty=Decimal("100"),
+            price=Decimal("0.07145"),
+            client_order_id="m7-9-entry-limit",
+        )
+    )
+
+    assert calls[0][1]["positionSide"] == "LONG"
+    assert calls[1][1]["positionSide"] == "SHORT"
+    assert all("reduceOnly" not in params for _, params in calls)
+
+
+def test_get_position_selects_requested_hedge_side(monkeypatch) -> None:
+    client = BinanceFuturesClient(api_key="", api_secret="")
+
+    async def call(method: str, **kwargs: object) -> list[dict[str, str]]:
+        assert method == "get_position_risk"
+        assert kwargs == {"symbol": "HBARUSDT"}
+        return [
+            {
+                "symbol": "HBARUSDT",
+                "positionSide": "SHORT",
+                "positionAmt": "-25",
+                "entryPrice": "0.072",
+            },
+            {
+                "symbol": "HBARUSDT",
+                "positionSide": "LONG",
+                "positionAmt": "100",
+                "entryPrice": "0.07145",
+            },
+        ]
+
+    monkeypatch.setattr(client, "_call", call)
+
+    long_position = asyncio.run(
+        client.get_position(symbol="HBARUSDT", position_side="LONG")
+    )
+    short_position = asyncio.run(
+        client.get_position(symbol="HBARUSDT", position_side="SHORT")
+    )
+
+    assert long_position is not None and long_position.qty == Decimal("100")
+    assert short_position is not None and short_position.qty == Decimal("-25")
+
+
+def test_close_position_looks_up_requested_side_and_omits_reduce_only(
+    monkeypatch,
+) -> None:
+    client = BinanceFuturesClient(api_key="", api_secret="")
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def call(method: str, **kwargs: object) -> object:
+        calls.append((method, kwargs))
+        if method == "get_position_risk":
+            return [
+                {
+                    "symbol": "HBARUSDT",
+                    "positionSide": "LONG",
+                    "positionAmt": "100",
+                },
+                {
+                    "symbol": "HBARUSDT",
+                    "positionSide": "SHORT",
+                    "positionAmt": "-25",
+                },
+            ]
+        return dict(kwargs, orderId=1, status="NEW")
+
+    monkeypatch.setattr(client, "_call", call)
+    asyncio.run(
+        client.close_position_market(
+            symbol="HBARUSDT",
+            side="BUY",
+            position_side="SHORT",
+            qty=None,
+            client_order_id="m7-9-close",
+        )
+    )
+
+    assert calls[0] == ("get_position_risk", {"symbol": "HBARUSDT"})
+    assert calls[1][0] == "new_order"
+    assert calls[1][1]["positionSide"] == "SHORT"
+    assert calls[1][1]["quantity"] == "25"
+    assert "reduceOnly" not in calls[1][1]
 
 
 def test_open_and_cancel_algo_orders_use_signed_algo_endpoints(monkeypatch) -> None:
@@ -268,6 +381,8 @@ def test_order_side_mapping() -> None:
     assert to_binance_order_side(trade_side="LONG", action="close") == "SELL"
     assert to_binance_order_side(trade_side="SHORT", action="open") == "SELL"
     assert to_binance_order_side(trade_side="SHORT", action="close") == "BUY"
+    assert to_binance_position_side(trade_side="LONG") == "LONG"
+    assert to_binance_position_side(trade_side="short") == "SHORT"
 
 
 def test_mark_price_stream_uses_production_market_route(monkeypatch) -> None:

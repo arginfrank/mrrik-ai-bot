@@ -111,12 +111,12 @@ def _no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _trade_and_plan(
-    *, model3: bool = False, leg_count: int = 1
+    *, model3: bool = False, leg_count: int = 1, side: str = "LONG"
 ) -> tuple[Trade, Signal, ExecutionPlan]:
     signal = Signal(
         id=1,
         symbol="HBARUSDT",
-        side="LONG",
+        side=side,
         entry=Decimal("0.07145"),
         stop_loss=Decimal("0.07077"),
         leverage=42,
@@ -129,7 +129,7 @@ def _trade_and_plan(
         signal_id=1,
         user_id=2,
         symbol="HBARUSDT",
-        side="LONG",
+        side=side,
         leverage=42,
         margin_usdt=Decimal("10"),
         notional_usdt=Decimal("420"),
@@ -165,8 +165,11 @@ def _run(
     entry_mode: str = "limit",
     model3: bool = False,
     leg_count: int = 1,
+    side: str = "LONG",
 ):
-    trade, signal, plan = _trade_and_plan(model3=model3, leg_count=leg_count)
+    trade, signal, plan = _trade_and_plan(
+        model3=model3, leg_count=leg_count, side=side
+    )
     result = asyncio.run(
         place_initial_orders(
             exchange=fake,
@@ -203,6 +206,32 @@ def test_order_sequence_and_deterministic_ids() -> None:
     assert sl_call["qty"] == Decimal("100")
 
 
+@pytest.mark.parametrize(
+    ("trade_side", "entry_side", "close_side"),
+    (("LONG", "BUY", "SELL"), ("SHORT", "SELL", "BUY")),
+)
+def test_every_trade_order_uses_its_hedge_position_side(
+    trade_side: str, entry_side: str, close_side: str
+) -> None:
+    fake = FakeExchange()
+    _run(fake, side=trade_side)
+
+    calls = {
+        name: values
+        for name, values in fake.calls
+        if name in {"entry_limit", "sl", "tp"}
+    }
+    assert set(calls) == {"entry_limit", "sl", "tp"}
+    assert all(
+        isinstance(values, dict) and values["position_side"] == trade_side
+        for values in calls.values()
+    )
+    assert calls["entry_limit"]["side"] == entry_side  # type: ignore[index]
+    assert calls["sl"]["side"] == close_side  # type: ignore[index]
+    assert calls["tp"]["side"] == close_side  # type: ignore[index]
+    assert all("reduce_only" not in values for values in calls.values())  # type: ignore[operator]
+
+
 def test_limit_guard_cancels_unfilled_entry() -> None:
     fake = FakeExchange(entry_status="NEW")
     _, result = _run(fake)
@@ -228,6 +257,10 @@ def test_sl_placement_failure_emergency_closes_instead_of_opening() -> None:
     assert result.sl_order_id is None
     assert "close" in [name for name, _ in fake.calls]
     assert result.status != "opened"
+    close_call = next(values for name, values in fake.calls if name == "close")
+    assert isinstance(close_call, dict)
+    assert close_call["side"] == "SELL"
+    assert close_call["position_side"] == "LONG"
 
 
 def test_unconfirmed_sl_emergency_closes_instead_of_opening() -> None:

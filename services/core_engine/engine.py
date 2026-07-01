@@ -9,7 +9,7 @@ from typing import Any, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from shared.crypto import decrypt_secret
-from shared.exchange.binance import to_binance_order_side
+from shared.exchange.binance import to_binance_order_side, to_binance_position_side
 from shared.monitoring import build_admin_alert_payload
 from shared.signal.types import SignalSide
 
@@ -619,6 +619,7 @@ async def _close_after_protection_failure(*, exchange: Any, trade: Any) -> None:
         await exchange.close_position_market(
             symbol=trade.symbol,
             side=to_binance_order_side(trade_side=trade.side, action="close"),
+            position_side=to_binance_position_side(trade_side=trade.side),
             qty=None,
             client_order_id=client_order_id(trade_id=trade.id, purpose="close"),
         )

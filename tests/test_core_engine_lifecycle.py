@@ -192,6 +192,7 @@ def test_tp1_fill_marks_leg_and_can_move_stop_to_break_even() -> None:
     assert trade.sl_order_id == client_order_id(trade_id=trade.id, purpose="be_sl")
     assert exchange.calls[0][1]["stop_price"] == trade.signal.entry
     assert exchange.calls[0][1]["qty"] == Decimal("50")
+    assert exchange.calls[0][1]["position_side"] == "LONG"
 
 
 def test_be_stop_placement_failure_keeps_old_stop_and_stored_id() -> None:
@@ -327,3 +328,4 @@ def test_model3_mark_price_closes_at_roi_threshold() -> None:
     assert result[0].closed_reason == "model3_exit"
     assert result[0].realized_roi_pct == Decimal("20")
     assert [name for name, _ in exchange.calls][0] == "close"
+    assert exchange.calls[0][1]["position_side"] == "LONG"

@@ -103,6 +103,7 @@ class BinanceFuturesClient:
         await self._call("change_leverage", symbol=symbol, leverage=leverage)
 
     async def set_margin_type_isolated(self, *, symbol: str) -> None:
+        # Hedge Mode risk: behavior with an open opposite-side position is unverified.
         try:
             await self._call("change_margin_type", symbol=symbol, marginType="ISOLATED")
         except Exception as error:
@@ -115,6 +116,7 @@ class BinanceFuturesClient:
         *,
         symbol: str,
         side: str,
+        position_side: str,
         qty: Decimal,
         price: Decimal,
         client_order_id: str,
@@ -123,6 +125,7 @@ class BinanceFuturesClient:
             "new_order",
             symbol=symbol,
             side=side,
+            positionSide=position_side,
             type="LIMIT",
             timeInForce="GTC",
             quantity=_decimal_string(qty),
@@ -136,6 +139,7 @@ class BinanceFuturesClient:
         *,
         symbol: str,
         side: str,
+        position_side: str,
         qty: Decimal,
         client_order_id: str,
     ) -> ExchangeOrder:
@@ -143,6 +147,7 @@ class BinanceFuturesClient:
             "new_order",
             symbol=symbol,
             side=side,
+            positionSide=position_side,
             type="MARKET",
             quantity=_decimal_string(qty),
             newClientOrderId=client_order_id,
@@ -154,6 +159,7 @@ class BinanceFuturesClient:
         *,
         symbol: str,
         side: str,
+        position_side: str,
         qty: Decimal,
         stop_price: Decimal,
         client_order_id: str,
@@ -165,10 +171,10 @@ class BinanceFuturesClient:
                 "algoType": "CONDITIONAL",
                 "symbol": symbol,
                 "side": side,
+                "positionSide": position_side,
                 "type": "STOP_MARKET",
                 "triggerPrice": _decimal_string(stop_price),
                 "quantity": _decimal_string(qty),
-                "reduceOnly": "true",
                 "workingType": "MARK_PRICE",
                 "clientAlgoId": client_order_id,
             },
@@ -180,10 +186,10 @@ class BinanceFuturesClient:
         *,
         symbol: str,
         side: str,
+        position_side: str,
         qty: Decimal,
         stop_price: Decimal,
         client_order_id: str,
-        reduce_only: bool,
     ) -> ExchangeOrder:
         raw = await self._signed_request(
             "POST",
@@ -192,10 +198,10 @@ class BinanceFuturesClient:
                 "algoType": "CONDITIONAL",
                 "symbol": symbol,
                 "side": side,
+                "positionSide": position_side,
                 "type": "TAKE_PROFIT_MARKET",
                 "triggerPrice": _decimal_string(stop_price),
                 "quantity": _decimal_string(qty),
-                "reduceOnly": "true",
                 "workingType": "MARK_PRICE",
                 "clientAlgoId": client_order_id,
             },
@@ -229,12 +235,15 @@ class BinanceFuturesClient:
         *,
         symbol: str,
         side: str,
+        position_side: str,
         qty: Decimal | None,
         client_order_id: str,
     ) -> ExchangeOrder:
         close_qty = qty
         if close_qty is None:
-            position = await self.get_position(symbol=symbol)
+            position = await self.get_position(
+                symbol=symbol, position_side=position_side
+            )
             if position is None:
                 raise ValueError("cannot close a missing position")
             close_qty = abs(position.qty)
@@ -242,19 +251,21 @@ class BinanceFuturesClient:
             "new_order",
             symbol=symbol,
             side=side,
+            positionSide=position_side,
             type="MARKET",
             quantity=_decimal_string(close_qty),
-            reduceOnly=True,
             newClientOrderId=client_order_id,
         )
         return parse_exchange_order(raw)
 
-    async def get_position(self, *, symbol: str) -> PositionSnapshot | None:
+    async def get_position(
+        self, *, symbol: str, position_side: str
+    ) -> PositionSnapshot | None:
         positions = await self._call("get_position_risk", symbol=symbol)
         for raw in positions:
             if raw.get("symbol") != symbol.upper():
                 continue
-            if raw.get("positionSide", "BOTH") != "BOTH":
+            if raw.get("positionSide") != position_side:
                 continue
             qty = Decimal(str(raw.get("positionAmt", "0")))
             if qty == 0:
@@ -421,6 +432,14 @@ def to_binance_order_side(*, trade_side: str, action: str) -> str:
     if normalized_side == "LONG":
         return "BUY" if normalized_action == "open" else "SELL"
     return "SELL" if normalized_action == "open" else "BUY"
+
+
+def to_binance_position_side(*, trade_side: str) -> str:
+    """Map a trade direction to its Binance Hedge Mode position side."""
+    normalized_side = trade_side.upper()
+    if normalized_side not in {"LONG", "SHORT"}:
+        raise ValueError("trade_side must be LONG or SHORT")
+    return normalized_side
 
 
 def _optional_decimal(value: Any) -> Decimal | None:
