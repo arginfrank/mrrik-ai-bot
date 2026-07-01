@@ -35,6 +35,7 @@ class ExchangeClient(Protocol):
         *,
         symbol: str,
         side: str,
+        position_side: str,
         qty: Decimal,
         price: Decimal,
         client_order_id: str,
@@ -45,6 +46,7 @@ class ExchangeClient(Protocol):
         *,
         symbol: str,
         side: str,
+        position_side: str,
         qty: Decimal,
         client_order_id: str,
     ) -> ExchangeOrder: ...
@@ -54,6 +56,7 @@ class ExchangeClient(Protocol):
         *,
         symbol: str,
         side: str,
+        position_side: str,
         qty: Decimal,
         stop_price: Decimal,
         client_order_id: str,
@@ -64,10 +67,10 @@ class ExchangeClient(Protocol):
         *,
         symbol: str,
         side: str,
+        position_side: str,
         qty: Decimal,
         stop_price: Decimal,
         client_order_id: str,
-        reduce_only: bool,
     ) -> ExchangeOrder: ...
 
     async def cancel_order(self, *, symbol: str, client_order_id: str) -> None: ...
@@ -83,11 +86,14 @@ class ExchangeClient(Protocol):
         *,
         symbol: str,
         side: str,
+        position_side: str,
         qty: Decimal | None,
         client_order_id: str,
     ) -> ExchangeOrder: ...
 
-    async def get_position(self, *, symbol: str) -> PositionSnapshot | None: ...
+    async def get_position(
+        self, *, symbol: str, position_side: str
+    ) -> PositionSnapshot | None: ...
 
     async def get_open_orders(
         self, *, symbol: str | None = None

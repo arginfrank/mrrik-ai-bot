@@ -13,7 +13,7 @@ from services.core_engine.orders import EntryGuard, place_initial_orders
 from services.core_engine.risk import ExecutionPlan, build_execution_plan
 from services.core_engine.testnet import check_testnet_readiness
 from shared.config import AppSettings, load_config
-from shared.exchange.binance import BinanceFuturesClient
+from shared.exchange.binance import BinanceFuturesClient, to_binance_position_side
 from shared.exchange.client import ExchangeClient
 from shared.exchange.types import MarkPrice, PositionSnapshot, SymbolFilters
 from shared.models import Signal, Trade
@@ -22,6 +22,7 @@ from shared.signal.types import SignalSide
 
 _SYMBOL = "BTCUSDT"
 _SIDE = SignalSide.LONG
+_POSITION_SIDE = to_binance_position_side(trade_side=_SIDE.value)
 _LEVERAGE = 5
 _MAX_NOTIONAL_USDT = Decimal("100")
 _TESTNET_REST_URL = "https://testnet.binancefuture.com"
@@ -112,7 +113,9 @@ async def _run_scenario(settings: AppSettings) -> dict[str, Any]:
 
         open_algo_orders = await exchange.get_open_algo_orders(symbol=_SYMBOL)
         open_client_ids = {order.client_order_id for order in open_algo_orders}
-        position = await exchange.get_position(symbol=_SYMBOL)
+        position = await exchange.get_position(
+            symbol=_SYMBOL, position_side=_POSITION_SIDE
+        )
         sl_confirmed = (
             result.sl_order_id is not None
             and result.sl_order_id in open_client_ids
@@ -155,7 +158,9 @@ async def _run_scenario(settings: AppSettings) -> dict[str, Any]:
 
 
 async def _require_flat_start(exchange: BinanceFuturesClient) -> None:
-    position = await exchange.get_position(symbol=_SYMBOL)
+    position = await exchange.get_position(
+        symbol=_SYMBOL, position_side=_POSITION_SIDE
+    )
     open_orders = await exchange.get_open_orders(symbol=_SYMBOL)
     open_algo_orders = await exchange.get_open_algo_orders(symbol=_SYMBOL)
     if position is not None or open_orders or open_algo_orders:
@@ -263,6 +268,7 @@ async def _cleanup(
             await exchange.close_position_market(
                 symbol=_SYMBOL,
                 side=close_side,
+                position_side=_POSITION_SIDE,
                 qty=None,
                 client_order_id=client_order_id(
                     trade_id=trade_id,
@@ -292,7 +298,9 @@ async def _get_position_for_cleanup(
 ) -> PositionSnapshot | None:
     for attempt in range(3):
         try:
-            return await exchange.get_position(symbol=_SYMBOL)
+            return await exchange.get_position(
+                symbol=_SYMBOL, position_side=_POSITION_SIDE
+            )
         except Exception:
             if attempt < 2:
                 await asyncio.sleep(_CLEANUP_RETRY_DELAY_SEC)
@@ -309,7 +317,9 @@ async def _verify_cleanup(
     residual_orders = -1
     for attempt in range(_CLEANUP_ATTEMPTS):
         try:
-            position = await exchange.get_position(symbol=_SYMBOL)
+            position = await exchange.get_position(
+                symbol=_SYMBOL, position_side=_POSITION_SIDE
+            )
             open_orders = await exchange.get_open_orders(symbol=_SYMBOL)
             open_algo_orders = await exchange.get_open_algo_orders(symbol=_SYMBOL)
             residual_position = position is not None

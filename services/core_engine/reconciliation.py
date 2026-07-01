@@ -5,7 +5,7 @@ from decimal import Decimal
 import inspect
 from typing import Any
 
-from shared.exchange.binance import to_binance_order_side
+from shared.exchange.binance import to_binance_order_side, to_binance_position_side
 from shared.exchange.client import ExchangeClient
 
 from services.core_engine.ids import client_order_id
@@ -38,7 +38,10 @@ async def reconcile_open_trades(
                 repository=repository,
                 trade=trade,
             )
-            position = await exchange.get_position(symbol=trade.symbol)
+            position_side = to_binance_position_side(trade_side=trade.side)
+            position = await exchange.get_position(
+                symbol=trade.symbol, position_side=position_side
+            )
             open_orders = await exchange.get_open_algo_orders(symbol=trade.symbol)
             open_ids = {order.client_order_id for order in open_orders}
             if position is None and not open_orders:
@@ -85,6 +88,7 @@ async def reconcile_open_trades(
                     await exchange.place_stop_market(
                         symbol=trade.symbol,
                         side=close_side,
+                        position_side=position_side,
                         qty=remaining,
                         stop_price=stop_price,
                         client_order_id=sl_id,
@@ -102,10 +106,10 @@ async def reconcile_open_trades(
                 await exchange.place_take_profit_market(
                     symbol=trade.symbol,
                     side=close_side,
+                    position_side=position_side,
                     qty=Decimal(leg.qty),
                     stop_price=Decimal(leg.target_price),
                     client_order_id=tp_id,
-                    reduce_only=True,
                 )
                 repository.set_leg_tp_order(leg=leg, tp_order_id=tp_id)
                 repaired += 1

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 import logging
 
-from shared.exchange.binance import to_binance_order_side
+from shared.exchange.binance import to_binance_order_side, to_binance_position_side
 from shared.exchange.client import ExchangeClient
 from shared.exchange.types import MarkPrice, UserStreamEvent
 from shared.models import Trade
@@ -203,6 +203,7 @@ async def handle_mark_price_for_model3(
         await exchange.close_position_market(
             symbol=trade.symbol,
             side=to_binance_order_side(trade_side=trade.side, action="close"),
+            position_side=to_binance_position_side(trade_side=trade.side),
             qty=None,
             client_order_id=client_order_id(
                 trade_id=trade.id, purpose="model3_exit"
@@ -236,6 +237,7 @@ async def _place_break_even_stop(
             await exchange.place_stop_market(
                 symbol=trade.symbol,
                 side=to_binance_order_side(trade_side=trade.side, action="close"),
+                position_side=to_binance_position_side(trade_side=trade.side),
                 qty=qty,
                 stop_price=stop_price,
                 client_order_id=client_order_id,

@@ -7,7 +7,7 @@ from decimal import Decimal
 import logging
 import time
 
-from shared.exchange.binance import to_binance_order_side
+from shared.exchange.binance import to_binance_order_side, to_binance_position_side
 from shared.exchange.client import ExchangeClient
 from shared.exchange.types import ExchangeOrder
 from shared.models import Signal, Trade
@@ -49,11 +49,13 @@ async def place_initial_orders(
     await exchange.set_leverage(symbol=trade.symbol, leverage=plan.leverage)
     await exchange.set_margin_type_isolated(symbol=trade.symbol)
     order_id = client_order_id(trade_id=trade.id, purpose="entry")
+    position_side = to_binance_position_side(trade_side=trade.side)
     side = to_binance_order_side(trade_side=trade.side, action="open")
     if entry_mode == "limit":
         entry_order = await exchange.place_entry_limit(
             symbol=trade.symbol,
             side=side,
+            position_side=position_side,
             qty=plan.qty,
             price=plan.entry_price,
             client_order_id=order_id,
@@ -62,6 +64,7 @@ async def place_initial_orders(
         entry_order = await exchange.place_entry_market(
             symbol=trade.symbol,
             side=side,
+            position_side=position_side,
             qty=plan.qty,
             client_order_id=order_id,
         )
@@ -74,6 +77,7 @@ async def place_initial_orders(
         plan=plan,
         entry_order=entry_order,
         guard=entry_guard,
+        position_side=position_side,
     )
     if not filled:
         await exchange.cancel_order(symbol=trade.symbol, client_order_id=order_id)
@@ -87,6 +91,7 @@ async def place_initial_orders(
         exchange=exchange,
         trade=trade,
         plan=plan,
+        position_side=position_side,
     )
     return OpenTradeResult(
         status=protected.status,
@@ -102,14 +107,16 @@ async def place_protective_orders(
     exchange: ExchangeClient,
     trade: Trade,
     plan: ExecutionPlan,
+    position_side: str,
 ) -> OpenTradeResult:
-    """Confirm a live reduce-only SL before placing any optional TP legs."""
+    """Confirm a live position-specific SL before placing optional TP legs."""
     close_side = to_binance_order_side(trade_side=trade.side, action="close")
     sl_id = client_order_id(trade_id=trade.id, purpose="sl")
     await _place_stop_market_with_retry(
         exchange=exchange,
         symbol=trade.symbol,
         side=close_side,
+        position_side=position_side,
         qty=plan.qty,
         stop_price=plan.stop_loss,
         client_order_id=sl_id,
@@ -124,6 +131,7 @@ async def place_protective_orders(
             exchange=exchange,
             trade=trade,
             close_side=close_side,
+            position_side=position_side,
         )
 
     LOGGER.info(
@@ -141,6 +149,7 @@ async def place_protective_orders(
             exchange=exchange,
             symbol=trade.symbol,
             side=close_side,
+            position_side=position_side,
             qty=leg.qty,
             stop_price=leg.target_price,
             client_order_id=tp_id,
@@ -168,6 +177,7 @@ async def _place_stop_market_with_retry(
     exchange: ExchangeClient,
     symbol: str,
     side: str,
+    position_side: str,
     qty: Decimal,
     stop_price: Decimal,
     client_order_id: str,
@@ -177,6 +187,7 @@ async def _place_stop_market_with_retry(
             await exchange.place_stop_market(
                 symbol=symbol,
                 side=side,
+                position_side=position_side,
                 qty=qty,
                 stop_price=stop_price,
                 client_order_id=client_order_id,
@@ -214,6 +225,7 @@ async def _place_take_profit_with_retry(
     exchange: ExchangeClient,
     symbol: str,
     side: str,
+    position_side: str,
     qty: Decimal,
     stop_price: Decimal,
     client_order_id: str,
@@ -223,10 +235,10 @@ async def _place_take_profit_with_retry(
             await exchange.place_take_profit_market(
                 symbol=symbol,
                 side=side,
+                position_side=position_side,
                 qty=qty,
                 stop_price=stop_price,
                 client_order_id=client_order_id,
-                reduce_only=True,
             )
             return True
         except Exception:
@@ -241,6 +253,7 @@ async def _emergency_close(
     exchange: ExchangeClient,
     trade: Trade,
     close_side: str,
+    position_side: str,
 ) -> OpenTradeResult:
     emergency_id = client_order_id(trade_id=trade.id, purpose="emergency_close")
     for attempt in range(len(_ORDER_RETRY_DELAYS_SEC) + 1):
@@ -248,6 +261,7 @@ async def _emergency_close(
             await exchange.close_position_market(
                 symbol=trade.symbol,
                 side=close_side,
+                position_side=position_side,
                 qty=None,
                 client_order_id=emergency_id,
             )
@@ -305,6 +319,7 @@ async def _wait_for_entry_fill(
     plan: ExecutionPlan,
     entry_order: ExchangeOrder,
     guard: EntryGuard,
+    position_side: str,
 ) -> bool:
     if entry_order.status == "FILLED":
         return True
@@ -325,7 +340,9 @@ async def _wait_for_entry_fill(
     try:
         deadline = time.monotonic() + guard.entry_fill_timeout_sec
         while time.monotonic() < deadline:
-            position = await exchange.get_position(symbol=trade.symbol)
+            position = await exchange.get_position(
+                symbol=trade.symbol, position_side=position_side
+            )
             current_price = latest_mark[0]
             if current_price is None and position is not None:
                 current_price = position.mark_price

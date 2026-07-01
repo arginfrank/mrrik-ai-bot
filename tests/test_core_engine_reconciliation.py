@@ -40,7 +40,10 @@ class FakeExchange:
         self.orders = orders
         self.writes: list[tuple[str, dict[str, object]]] = []
 
-    async def get_position(self, *, symbol: str):
+    async def get_position(self, *, symbol: str, position_side: str):
+        self.writes.append(
+            ("get_position", {"symbol": symbol, "position_side": position_side})
+        )
         if not self.has_position:
             return None
         return PositionSnapshot(
@@ -122,12 +125,21 @@ def test_missing_sl_and_tp_are_repaired_with_deterministic_ids() -> None:
     assert trade.legs[0].tp_order_id == client_order_id(
         trade_id=trade.id, purpose="tp", leg_index=1
     )
-    assert {write[1]["client_order_id"] for write in exchange.writes} == {
+    assert {
+        values["client_order_id"]
+        for kind, values in exchange.writes
+        if kind in {"sl", "tp"}
+    } == {
         trade.sl_order_id,
         trade.legs[0].tp_order_id,
     }
     sl_write = next(values for kind, values in exchange.writes if kind == "sl")
     assert sl_write["qty"] == Decimal("100")
+    assert sl_write["position_side"] == "LONG"
+    tp_write = next(values for kind, values in exchange.writes if kind == "tp")
+    assert tp_write["position_side"] == "LONG"
+    assert "reduce_only" not in sl_write
+    assert "reduce_only" not in tp_write
 
 
 def test_missing_sl_is_repaired_with_remaining_quantity() -> None:
@@ -173,10 +185,15 @@ def test_missing_sl_is_repaired_with_remaining_quantity() -> None:
     assert result.repaired_orders == 1
     assert exchange.writes == [
         (
+            "get_position",
+            {"symbol": "HBARUSDT", "position_side": "LONG"},
+        ),
+        (
             "sl",
             {
                 "symbol": "HBARUSDT",
                 "side": "SELL",
+                "position_side": "LONG",
                 "qty": Decimal("60"),
                 "stop_price": Decimal("0.07077"),
                 "client_order_id": client_order_id(
@@ -200,7 +217,12 @@ def test_missing_sl_is_not_repaired_when_no_quantity_remains() -> None:
     )
 
     assert result.repaired_orders == 0
-    assert exchange.writes == []
+    assert exchange.writes == [
+        (
+            "get_position",
+            {"symbol": "HBARUSDT", "position_side": "LONG"},
+        )
+    ]
 
 
 def test_missing_exchange_truth_closes_unknown_and_records_note() -> None:
